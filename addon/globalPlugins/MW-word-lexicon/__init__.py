@@ -26,9 +26,9 @@ def get_word_definition_from_proxy(word):
         if isinstance(first_entry, dict) and "shortdef" in first_entry:
           defs = first_entry["shortdef"]
           if isinstance(defs, list) and defs:
-            return defs[0]
-    except Exception:
-      pass
+            return "; ".join(defs)
+    except Exception as e:
+      print(f"Error parsing definition: {e}")
   return None
 
 def get_selected_text():
