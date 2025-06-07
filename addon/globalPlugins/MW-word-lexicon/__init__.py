@@ -16,7 +16,13 @@ def get_word_of_the_day():
       return match.group(1)
   return None
 
-def extract_all_examples(entry):
+def clean_example_text(text, keyword):
+  text = re.sub(r"{[^{}]+}", "", text)
+  pattern = re.compile(r"{[^{}]*}?" + re.escape(keyword) + r"{[^{}]*}?|(?<!\w)" + re.escape(keyword) + r"(?!\w)", re.IGNORECASE)
+  text = pattern.sub(lambda m: f"({keyword})", text)
+  return text.strip()
+
+def extract_all_examples(entry, keyword):
   examples = []
 
   def extract_from_dt(dt):
@@ -26,7 +32,8 @@ def extract_all_examples(entry):
           if isinstance(vis_item, dict):
             text = vis_item.get("t", "")
             if text:
-              examples.append(text)
+              cleaned = clean_example_text(text, keyword)
+              examples.append(cleaned)
       elif isinstance(part[1], list):
         for subpart in part[1]:
           if isinstance(subpart, list):
@@ -60,7 +67,7 @@ def get_word_definition_from_proxy(word):
           defs = entry.get("shortdef", [])
           all_definitions.extend(defs)
 
-          examples = extract_all_examples(entry)
+          examples = extract_all_examples(entry, word)
           all_examples.extend(examples)
 
         if not all_definitions and not all_examples:
