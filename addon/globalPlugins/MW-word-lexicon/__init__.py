@@ -16,17 +16,69 @@ def get_word_of_the_day():
       return match.group(1)
   return None
 
+def extract_all_examples(entry):
+  examples = []
+
+  def extract_from_dt(dt):
+    for part in dt:
+      if part[0] == "vis":
+        for vis_item in part[1]:
+          if isinstance(vis_item, dict):
+            text = vis_item.get("t", "")
+            if text:
+              examples.append(text)
+      elif isinstance(part[1], list):
+        for subpart in part[1]:
+          if isinstance(subpart, list):
+            extract_from_dt(subpart)
+
+  try:
+    defs = entry.get("def", [])
+    for d in defs:
+      for sseq in d.get("sseq", []):
+        for item in sseq:
+          if len(item) >= 2 and isinstance(item[1], dict):
+            dt = item[1].get("dt", [])
+            extract_from_dt(dt)
+  except Exception as e:
+    print(f"Error extracting examples: {e}")
+  return examples
+
 def get_word_definition_from_proxy(word):
   response = requests.get(DICTIONARY_API_URL.format(word))
   if response.status_code == 200:
     try:
       data = response.json()
       if data and isinstance(data, list):
-        first_entry = data[0]
-        if isinstance(first_entry, dict) and "shortdef" in first_entry:
-          defs = first_entry["shortdef"]
-          if isinstance(defs, list) and defs:
-            return "; ".join(defs)
+        all_definitions = []
+        all_examples = []
+
+        for entry in data:
+          if not isinstance(entry, dict):
+            continue
+
+          defs = entry.get("shortdef", [])
+          all_definitions.extend(defs)
+
+          examples = extract_all_examples(entry)
+          all_examples.extend(examples)
+
+        if not all_definitions and not all_examples:
+          return "No definitions or examples found."
+
+        result = ""
+
+        if all_definitions:
+          result += "Definitions:\n"
+          for i, d in enumerate(all_definitions, 1):
+            result += f"{i}. {d}\n"
+
+        if all_examples:
+          result += "\nExamples:\n"
+          for i, ex in enumerate(all_examples, 1):
+            result += f"{i}. {ex}\n"
+
+        return result.strip()
     except Exception as e:
       print(f"Error parsing definition: {e}")
   return None
