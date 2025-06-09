@@ -8,12 +8,24 @@ from scriptHandler import script
 
 DICTIONARY_API_URL = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/?word={}"
 
+def strip_html_tags(text):
+  return re.sub(r'<[^>]+>', '', text)
+
 def get_word_of_the_day():
-  response = requests.get(DICTIONARY_API_URL.replace("{}", ""))
+  url = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/wotd"
+  response = requests.get(url)
   if response.status_code == 200:
-    match = re.search(r'Word of the day: <strong>(.*?)</strong>', response.text)
-    if match:
-      return match.group(1)
+    html = response.text
+
+    word_match = re.search(r'<h2[^>]*class="word-header-txt"[^>]*>(.*?)</h2>', html, re.DOTALL)
+    word = strip_html_tags(word_match.group(1).strip()) if word_match else None
+
+    def_match = re.search(r'<div[^>]*class="wod-definition-container"[^>]*>.*?<p>(.*?)</p>', html, re.DOTALL)
+    raw_definition = def_match.group(1).strip() if def_match else None
+    definition = strip_html_tags(raw_definition) if raw_definition else None
+
+    if word:
+      return f"{word} - {definition}" if definition else word
   return None
 
 def clean_example_text(text, keyword):
@@ -149,7 +161,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     last_time = self.last_wotd_press_time
     self.last_wotd_press_time = current_time
 
-    if last_time and (current_time - last_time) < 1.0:
+    if last_time and (current_time - last_time) < 1.5:
       if self.word_of_the_day_text:
         api.copyToClip(self.word_of_the_day_text)
         ui.message("Text copied to clipboard.")
@@ -158,16 +170,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         ui.message("No Word of the Day to copy.")
       return
 
-    word = get_word_of_the_day()
-    if word:
-      definition = self.get_word_definition(word)
-      if definition:
-        full_text = f"Word of the Day: {word} - {definition}"
-        self.word_of_the_day_text = full_text
-        ui.message(full_text)
-      else:
-        message = f"Word of the Day: {word} (No definition found)"
-        self.word_of_the_day_text = message
-        ui.message(message)
+    raw = get_word_of_the_day()
+    if raw:
+      full_text = f"Word of the Day: {raw}"
+      self.word_of_the_day_text = full_text
+      ui.message(full_text)
     else:
       ui.message("Failed to retrieve Word of the Day.")
