@@ -153,7 +153,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       ui.message("Definition not found.")
 
   @script(
-    description="Get Word of the Day or copy it on quick second press.",
+    description="Get Word of the Day with examples or copy them on quick second press.",
     gesture="kb:control+shift+w"
   )
   def script_word_of_the_day(self, gesture):
@@ -172,8 +172,29 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     raw = get_word_of_the_day()
     if raw:
-      full_text = f"Word of the Day: {raw}"
-      self.word_of_the_day_text = full_text
-      ui.message(full_text)
+      word = raw.split(" - ")[0].strip()
+      message = f"Word of the Day: {raw}"
+
+      response = requests.get(DICTIONARY_API_URL.format(word))
+      if response.status_code == 200:
+        try:
+          data = response.json()
+          if data and isinstance(data, list):
+            all_examples = []
+            for entry in data:
+              if not isinstance(entry, dict):
+                continue
+              examples = extract_all_examples(entry, word)
+              all_examples.extend(examples)
+
+            if all_examples:
+              message += "\n\nExamples:\n"
+              for i, ex in enumerate(all_examples, 1):
+                message += f"{i}. {ex}\n"
+        except Exception as e:
+          print(f"Error extracting examples: {e}")
+
+      self.word_of_the_day_text = message.strip()
+      ui.message(self.word_of_the_day_text)
     else:
       ui.message("Failed to retrieve Word of the Day.")
