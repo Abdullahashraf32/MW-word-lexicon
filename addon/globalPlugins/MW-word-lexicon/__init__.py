@@ -6,6 +6,7 @@ import requests
 import re
 import wx
 from scriptHandler import script
+import config
 
 DICTIONARY_API_URL = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/?word={}"
 
@@ -119,7 +120,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.last_wotd_press_time = None
     self.last_definition_text = None
     self.word_of_the_day_text = None
-    self.copy_mode = 1
+    if "mwWordLexicon" not in config.conf:
+      config.conf.createSection("mwWordLexicon")
+    self.copy_mode = int(config.conf["mwWordLexicon"].get("copy_mode", 1))
     self.last_copy_mode2_press_time = None
 
   def get_word_definition(self, word):
@@ -154,6 +157,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
   @script(description="Cycle copy/display modes", gesture="kb:control+shift+a")
   def script_cycle_copy_mode(self, gesture):
     self.copy_mode = (self.copy_mode + 1) % 3
+    try:
+      config.conf["mwWordLexicon"]["copy_mode"] = self.copy_mode
+      config.save()
+    except Exception:
+      pass
     mode_name = ["Auto copy", "Double press to copy", "Copy and show dialog"][self.copy_mode]
     ui.message(f"Switched to: {mode_name}")
 
