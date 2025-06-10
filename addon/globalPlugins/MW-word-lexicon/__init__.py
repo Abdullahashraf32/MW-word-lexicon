@@ -4,6 +4,7 @@ import time
 import api
 import requests
 import re
+import wx
 from scriptHandler import script
 
 DICTIONARY_API_URL = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/?word={}"
@@ -118,50 +119,116 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.last_wotd_press_time = None
     self.last_definition_text = None
     self.word_of_the_day_text = None
+    self.copy_mode = 1
+    self.last_copy_mode2_press_time = None
 
   def get_word_definition(self, word):
     return get_word_definition_from_proxy(word)
 
-  @script(
-    description="Get word definition or copy last one if pressed quickly twice.",
-    gesture="kb:control+shift+d"
-  )
+  def handle_output(self, text):
+    if self.copy_mode == 0:
+      api.copyToClip(text)
+      ui.message(text)
+    elif self.copy_mode == 1:
+      ui.message(text)
+      self.last_definition_text = text
+    elif self.copy_mode == 2:
+      def show_dialog(text):
+        app = wx.App(False)
+        frame = wx.Frame(None, title="Definition", size=(600, 400))
+        panel = wx.Panel(frame)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        text_ctrl = wx.TextCtrl(panel, value=text, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
+        sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
+        ok_button = wx.Button(panel, label="OK")
+        ok_button.Bind(wx.EVT_BUTTON, lambda event: frame.Close())
+        sizer.Add(ok_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
+        panel.SetSizer(sizer)
+        frame.Show()
+        app.MainLoop()
+
+      wx.CallAfter(show_dialog, text)
+      api.copyToClip(text)
+      self.last_definition_text = text
+
+  @script(description="Cycle copy/display modes", gesture="kb:control+shift+a")
+  def script_cycle_copy_mode(self, gesture):
+    self.copy_mode = (self.copy_mode + 1) % 3
+    mode_name = ["Auto copy", "Double press to copy", "Copy and show dialog"][self.copy_mode]
+    ui.message(f"Switched to: {mode_name}")
+
+  @script(description="Get word definition or copy last one if pressed quickly twice.", gesture="kb:control+shift+d")
   def script_get_definition_with_smart_copy(self, gesture):
     current_time = time.time()
     last_time = self.last_definition_press_time
     self.last_definition_press_time = current_time
 
-    if last_time and (current_time - last_time) < 1.0:
-      if self.last_definition_text:
-        api.copyToClip(self.last_definition_text)
-        ui.message("Text copied to clipboard.")
-        self.last_definition_text = None
+    if self.copy_mode == 2:
+      last_mode2_time = self.last_copy_mode2_press_time
+      self.last_copy_mode2_press_time = current_time
+
+      if last_mode2_time and (current_time - last_mode2_time) < 1.0:
+        if self.last_definition_text:
+          api.copyToClip(self.last_definition_text)
+          ui.message("Text copied to clipboard.")
+          self.last_definition_text = None
+        else:
+          ui.message("No recent definition to copy.")
+        return
+
+      selected = get_selected_text()
+      if not selected:
+        ui.message("No text selected.")
+        return
+
+      definition = self.get_word_definition(selected)
+      if definition:
+        self.handle_output(definition)
       else:
-        ui.message("No recent definition to copy.")
-      return
+        ui.message("Definition not found.")
 
-    selected = get_selected_text()
-    if not selected:
-      ui.message("No text selected.")
-      return
+    elif self.copy_mode == 1:
+      if last_time and (current_time - last_time) < 1.0:
+        if self.last_definition_text:
+          api.copyToClip(self.last_definition_text)
+          ui.message("Text copied to clipboard.")
+          self.last_definition_text = None
+        else:
+          ui.message("No recent definition to copy.")
+        return
 
-    definition = self.get_word_definition(selected)
-    if definition:
-      self.last_definition_text = definition
-      ui.message(definition)
-    else:
-      ui.message("Definition not found.")
+      selected = get_selected_text()
+      if not selected:
+        ui.message("No text selected.")
+        return
 
-  @script(
-    description="Get Word of the Day with examples or copy them on quick second press.",
-    gesture="kb:control+shift+w"
-  )
+      definition = self.get_word_definition(selected)
+      if definition:
+        self.handle_output(definition)
+      else:
+        ui.message("Definition not found.")
+
+    elif self.copy_mode == 0:
+      selected = get_selected_text()
+      if not selected:
+        ui.message("No text selected.")
+        return
+
+      definition = self.get_word_definition(selected)
+      if definition:
+        self.handle_output(definition)
+      else:
+        ui.message("Definition not found.")
+
+  @script(description="Get Word of the Day with examples or copy them on quick second press.",
+           gesture="kb:control+shift+w"
+           )
   def script_word_of_the_day(self, gesture):
     current_time = time.time()
     last_time = self.last_wotd_press_time
     self.last_wotd_press_time = current_time
 
-    if last_time and (current_time - last_time) < 1.5:
+    if self.copy_mode == 1 and last_time and (current_time - last_time) < 1.5:
       if self.word_of_the_day_text:
         api.copyToClip(self.word_of_the_day_text)
         ui.message("Text copied to clipboard.")
@@ -195,6 +262,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           print(f"Error extracting examples: {e}")
 
       self.word_of_the_day_text = message.strip()
-      ui.message(self.word_of_the_day_text)
+      self.handle_output(self.word_of_the_day_text)
     else:
       ui.message("Failed to retrieve Word of the Day.")
