@@ -114,6 +114,10 @@ def get_selected_text():
   return None
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
+  history = []
+  historyIndex = -1      
+  restoring = False      
+
   def __init__(self):
     super().__init__()
     self.last_definition_press_time = None
@@ -124,6 +128,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       config.conf.createSection("mwWordLexicon")
     self.copy_mode = int(config.conf["mwWordLexicon"].get("copy_mode", 1))
     self.last_copy_mode2_press_time = None
+    self.lastPressTime = None
+
+
+  def _addToHistory(self, text):
+    clipboard_text = api.getClipData()
+    if not clipboard_text or clipboard_text.strip() != text.strip():
+      return  
+    if not GlobalPlugin.history or text != GlobalPlugin.history[-1]: 
+      GlobalPlugin.history.append(text)
+      if len(GlobalPlugin.history) > 3:
+        GlobalPlugin.history.pop(0)
+    GlobalPlugin.historyIndex = -1
 
   def get_word_definition(self, word):
     return get_word_definition_from_proxy(word)
@@ -131,10 +147,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
   def handle_output(self, text):
     if self.copy_mode == 0:
       api.copyToClip(text)
+      self._addToHistory(text)
       ui.message(text)
+
     elif self.copy_mode == 1:
       ui.message(text)
       self.last_definition_text = text
+
     elif self.copy_mode == 2:
       def show_dialog(text):
         app = wx.App(False)
@@ -152,6 +171,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
       wx.CallAfter(show_dialog, text)
       api.copyToClip(text)
+      self._addToHistory(text)
       self.last_definition_text = text
 
   @script(description="Cycle copy/display modes", gesture="kb:control+shift+a")
@@ -165,7 +185,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     mode_name = ["Auto copy", "Double press to copy", "Copy and show dialog"][self.copy_mode]
     ui.message(f"Switched to: {mode_name}")
 
-  @script(description="Get word definition or copy last one if pressed quickly twice.", gesture="kb:control+shift+d")
+  @script(
+    description="Get word definition or copy last one if pressed quickly twice.",
+    gesture="kb:control+shift+d"
+  )
   def script_get_definition_with_smart_copy(self, gesture):
     current_time = time.time()
     last_time = self.last_definition_press_time
@@ -178,6 +201,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       if last_mode2_time and (current_time - last_mode2_time) < 1.0:
         if self.last_definition_text:
           api.copyToClip(self.last_definition_text)
+          self._addToHistory(self.last_definition_text)
           ui.message("Text copied to clipboard.")
           self.last_definition_text = None
         else:
@@ -199,6 +223,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       if last_time and (current_time - last_time) < 1.0:
         if self.last_definition_text:
           api.copyToClip(self.last_definition_text)
+          self._addToHistory(self.last_definition_text)
           ui.message("Text copied to clipboard.")
           self.last_definition_text = None
         else:
@@ -239,6 +264,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     if self.copy_mode == 1 and last_time and (current_time - last_time) < 1.5:
       if self.word_of_the_day_text:
         api.copyToClip(self.word_of_the_day_text)
+        self._addToHistory(self.word_of_the_day_text)
         ui.message("Text copied to clipboard.")
         self.word_of_the_day_text = None
       else:
@@ -273,3 +299,28 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       self.handle_output(self.word_of_the_day_text)
     else:
       ui.message("Failed to retrieve Word of the Day.")
+
+  @script( 
+    description="Cycle through previously retrieved word definitions.",
+    gesture="kb:control+Shift+H"
+  )
+  def script_cycle_previous_definitions(self, gesture):
+    if not GlobalPlugin.history:
+      ui.message("No history available.")
+      return
+
+    if GlobalPlugin.restoring is False:
+      GlobalPlugin.restoring = True
+      GlobalPlugin.historyIndex = len(GlobalPlugin.history) - 1
+    else:
+      GlobalPlugin.historyIndex -= 1
+
+    if GlobalPlugin.historyIndex < 0:
+      ui.message("Reached the beginning of history.")
+      GlobalPlugin.restoring = False
+      GlobalPlugin.historyIndex = -1
+      return
+
+    text = GlobalPlugin.history[GlobalPlugin.historyIndex]
+    api.copyToClip(text)
+    ui.message(text)
