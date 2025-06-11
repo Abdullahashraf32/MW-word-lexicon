@@ -85,9 +85,9 @@ def get_word_definition_from_proxy(word):
           all_examples.extend(examples)
 
         if not all_definitions and not all_examples:
-          return "No definitions or examples found."
+          return "No definitions found."
 
-        result = ""
+        result = f"{word}:\n"
 
         if all_definitions:
           result += "Definitions:\n"
