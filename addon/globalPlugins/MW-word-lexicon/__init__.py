@@ -7,6 +7,7 @@ import re
 import wx
 from scriptHandler import script
 import config
+from . import thesaurus
 
 DICTIONARY_API_URL = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/?word={}"
 
@@ -324,3 +325,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     text = GlobalPlugin.history[GlobalPlugin.historyIndex]
     api.copyToClip(text)
     ui.message(text)
+
+  @script(
+    description="Get thesaurus (synonyms) for the selected word.",
+    gesture="kb:control+shift+t"
+  )
+  def script_get_thesaurus(self, gesture):
+    selected = get_selected_text()
+    if not selected:
+      ui.message("No text selected.")
+      return
+
+    synonyms = thesaurus.get_word_thesaurus(selected)
+    if synonyms:
+      self.handle_output(synonyms)
+    else:
+      ui.message("No synonyms found.")
