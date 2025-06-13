@@ -130,7 +130,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.copy_mode = int(config.conf["mwWordLexicon"].get("copy_mode", 1))
     self.last_copy_mode2_press_time = None
     self.lastPressTime = None
-
+    self.last_thesaurus_press_time = None
+    self.last_thesaurus_text = None
 
   def _addToHistory(self, text):
     clipboard_text = api.getClipData()
@@ -331,6 +332,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     gesture="kb:control+shift+t"
   )
   def script_get_thesaurus(self, gesture):
+    current_time = time.time()
+    last_time = self.last_thesaurus_press_time
+    self.last_thesaurus_press_time = current_time
+
+    if self.copy_mode == 1 and last_time and (current_time - last_time) < 1.5:
+      if self.last_thesaurus_text:
+        api.copyToClip(self.last_thesaurus_text)
+        self._addToHistory(self.last_thesaurus_text)
+        ui.message("Text copied to clipboard.")
+        self.last_thesaurus_text = None
+      else:
+        ui.message("No recent thesaurus text to copy.")
+      return
+
     selected = get_selected_text()
     if not selected:
       ui.message("No text selected.")
@@ -338,6 +353,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     synonyms = thesaurus.get_word_thesaurus(selected)
     if synonyms:
+      self.last_thesaurus_text = synonyms
       self.handle_output(synonyms)
     else:
       ui.message("No synonyms found.")
