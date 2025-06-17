@@ -19,10 +19,31 @@ def get_word_thesaurus(word):
 
       flat_synonyms = [syn for group in synonyms for syn in group]
       if flat_synonyms:
-        syns_text = ", ".join(flat_synonyms[:20])  # نعرض أول 20 مرادف فقط
+        syns_text = ", ".join(flat_synonyms[:20])
         return f"Synonyms for {word}: {syns_text}"
       else:
         return f"No synonyms found for {word}."
   except Exception as e:
     print(f"Error fetching thesaurus: {e}")
     return "Failed to fetch thesaurus."
+
+def get_word_antonyms(word):
+  try:
+    response = requests.get(THESAURUS_API_URL.format(word))
+    if response.status_code == 200:
+      data = response.json()
+      antonyms = []
+
+      for entry in data:
+        meta = entry.get("meta", {})
+        antonyms.extend(meta.get("ants", []))
+
+      flat_antonyms = [ant for group in antonyms for ant in group]
+      if flat_antonyms:
+        ants_text = ", ".join(flat_antonyms[:20])
+        return f"Antonyms for {word}: {ants_text}"
+      else:
+        return f"No antonyms found for {word}."
+  except Exception as e:
+    print(f"Error fetching antonyms: {e}")
+    return "Failed to fetch antonyms."
