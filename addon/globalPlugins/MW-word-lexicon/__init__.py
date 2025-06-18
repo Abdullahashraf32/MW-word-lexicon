@@ -132,6 +132,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.lastPressTime = None
     self.last_thesaurus_press_time = None
     self.last_thesaurus_text = None
+    self.last_antonyms_press_time = None
+    self.last_antonyms_text = None
 
   def _addToHistory(self, text):
     clipboard_text = api.getClipData()
@@ -357,3 +359,34 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       self.handle_output(synonyms)
     else:
       ui.message("No synonyms found.")
+
+  @script(
+    description="Get antonyms for the selected word.",
+    gesture="kb:control+shift+u"
+  )
+  def script_get_antonyms(self, gesture):
+    current_time = time.time()
+    last_time = self.last_antonyms_press_time
+    self.last_antonyms_press_time = current_time
+
+    if self.copy_mode == 1 and last_time and (current_time - last_time) < 1.5:
+      if self.last_antonyms_text:
+        api.copyToClip(self.last_antonyms_text)
+        self._addToHistory(self.last_antonyms_text)
+        ui.message("Text copied to clipboard.")
+        self.last_antonyms_text = None
+      else:
+        ui.message("No recent antonyms to copy.")
+      return
+
+    selected = get_selected_text()
+    if not selected:
+      ui.message("No text selected.")
+      return
+
+    antonyms = thesaurus.get_word_antonyms(selected)
+    if antonyms:
+      self.last_antonyms_text = antonyms
+      self.handle_output(antonyms)
+    else:
+      ui.message("No antonyms found.")
