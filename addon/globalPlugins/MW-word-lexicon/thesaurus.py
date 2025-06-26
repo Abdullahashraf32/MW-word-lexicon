@@ -19,7 +19,7 @@ def get_word_thesaurus(word):
 
       flat_synonyms = [syn for group in synonyms for syn in group]
       if flat_synonyms:
-        syns_text = ", ".join(flat_synonyms[:20])
+        syns_text = ", ".join(flat_synonyms)
         return f"Synonyms for {word}: {syns_text}"
       else:
         return f"No synonyms found for {word}."
@@ -40,7 +40,7 @@ def get_word_antonyms(word):
 
       flat_antonyms = [ant for group in antonyms for ant in group]
       if flat_antonyms:
-        ants_text = ", ".join(flat_antonyms[:20])
+        ants_text = ", ".join(flat_antonyms)
         return f"Antonyms for {word}: {ants_text}"
       else:
         return f"No antonyms found for {word}."
