@@ -1,3 +1,10 @@
+import os
+import sys
+
+addon_dir = os.path.dirname(__file__)
+if addon_dir not in sys.path:
+  sys.path.insert(0, addon_dir)
+import subprocess
 import globalPluginHandler
 import ui
 import time
@@ -13,6 +20,13 @@ DICTIONARY_API_URL = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/?wor
 
 def strip_html_tags(text):
   return re.sub(r'<[^>]+>', '', text)
+
+def play_with_ffplay(audio_url):
+  try:
+    ffplay_path = os.path.join(os.path.dirname(__file__), "bin", "ffplay.exe")
+    subprocess.Popen([ffplay_path, "-nodisp", "-autoexit", audio_url])
+  except Exception as e:
+    ui.message(f"Audio playback failed: {e}")
 
 def get_word_of_the_day():
   url = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/wotd"
@@ -159,21 +173,54 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       self.last_definition_text = text
 
     elif self.copy_mode == 2:
-      def show_dialog(text):
-        app = wx.App(False)
-        frame = wx.Frame(None, title="Definition", size=(600, 400))
-        panel = wx.Panel(frame)
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        text_ctrl = wx.TextCtrl(panel, value=text, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
-        sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
-        ok_button = wx.Button(panel, label="OK")
-        ok_button.Bind(wx.EVT_BUTTON, lambda event: frame.Close())
-        sizer.Add(ok_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
-        panel.SetSizer(sizer)
-        frame.Show()
-        app.MainLoop()
+      def show_dialog_with_audio(text, word):
+        try:
+          response = requests.get(DICTIONARY_API_URL.format(word))
+          if response.status_code != 200:
+            ui.message("Failed to retrieve audio data.")
+            return
 
-      wx.CallAfter(show_dialog, text)
+          data = response.json()
+          if not data or not isinstance(data, list):
+            ui.message("Invalid data format.")
+            return
+
+          audio_id = data[0].get('hwi', {}).get('prs', [{}])[0].get('sound', {}).get('audio')
+          if not audio_id:
+            ui.message("No pronunciation audio available.")
+            return
+
+          subfolder = audio_id[0]
+          audio_url = f"https://media.merriam-webster.com/audio/prons/en/us/mp3/{subfolder}/{audio_id}.mp3"
+          print(audio_url)
+
+          app = wx.App(False)
+          frame = wx.Frame(None, title="Definition", size=(600, 400))
+          panel = wx.Panel(frame)
+          sizer = wx.BoxSizer(wx.VERTICAL)
+
+          text_ctrl = wx.TextCtrl(panel, value=text, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
+          sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
+
+          def on_play(event):
+            play_with_ffplay(audio_url)
+
+          play_button = wx.Button(panel, label="Play")
+          play_button.Bind(wx.EVT_BUTTON, on_play)
+          sizer.Add(play_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
+
+          ok_button = wx.Button(panel, label="OK")
+          ok_button.Bind(wx.EVT_BUTTON, lambda event: frame.Close())
+          sizer.Add(ok_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
+
+          panel.SetSizer(sizer)
+          frame.Show()
+          app.MainLoop()
+
+        except Exception as e:
+          ui.message(f"Error: {str(e)}")
+
+      wx.CallAfter(show_dialog_with_audio, text, self.last_selected_word)
       api.copyToClip(text)
       self._addToHistory(text)
       self.last_definition_text = text
@@ -213,6 +260,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         return
 
       selected = get_selected_text()
+      self.last_selected_word = selected
       if not selected:
         ui.message("No text selected.")
         return
@@ -235,6 +283,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         return
 
       selected = get_selected_text()
+      self.last_selected_word = selected
       if not selected:
         ui.message("No text selected.")
         return
@@ -247,6 +296,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     elif self.copy_mode == 0:
       selected = get_selected_text()
+      self.last_selected_word = selected
       if not selected:
         ui.message("No text selected.")
         return
@@ -300,6 +350,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           print(f"Error extracting examples: {e}")
 
       self.word_of_the_day_text = message.strip()
+      self.last_selected_word = word
       self.handle_output(self.word_of_the_day_text)
     else:
       ui.message("Failed to retrieve Word of the Day.")
@@ -349,6 +400,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       return
 
     selected = get_selected_text()
+    self.last_selected_word = selected
     if not selected:
       ui.message("No text selected.")
       return
@@ -380,6 +432,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       return
 
     selected = get_selected_text()
+    self.last_selected_word = selected
     if not selected:
       ui.message("No text selected.")
       return
