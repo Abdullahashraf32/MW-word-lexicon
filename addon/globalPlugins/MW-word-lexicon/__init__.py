@@ -21,10 +21,17 @@ DICTIONARY_API_URL = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/?wor
 def strip_html_tags(text):
   return re.sub(r'<[^>]+>', '', text)
 
-def play_with_ffplay(audio_url):
+def play_with_ffplay(audio_url, speed=100):
   try:
     ffplay_path = os.path.join(os.path.dirname(__file__), "bin", "ffplay.exe")
-    subprocess.Popen([ffplay_path, "-nodisp", "-autoexit", audio_url])
+    rate = max(50, min(speed, 200)) / 100  # Clamp between 0.5x and 2x
+    subprocess.Popen([
+      ffplay_path,
+      "-nodisp",
+      "-autoexit",
+      "-af", f"atempo={rate:.2f}",
+      audio_url
+    ])
   except Exception as e:
     ui.message(f"Audio playback failed: {e}")
 
@@ -203,11 +210,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
 
           def on_play(event):
-            play_with_ffplay(audio_url)
+            speed = speed_slider.GetValue()
+            play_with_ffplay(audio_url, speed)
 
           play_button = wx.Button(panel, label="Play")
           play_button.Bind(wx.EVT_BUTTON, on_play)
           sizer.Add(play_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
+          speed_label = wx.StaticText(panel, label="Speed:")
+          sizer.Add(speed_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
+          speed_slider = wx.Slider(panel, value=100, minValue=50, maxValue=200, style=wx.SL_HORIZONTAL)
+          sizer.Add(speed_slider, 0, wx.EXPAND | wx.ALL, 10)
 
           ok_button = wx.Button(panel, label="OK")
           ok_button.Bind(wx.EVT_BUTTON, lambda event: frame.Close())
