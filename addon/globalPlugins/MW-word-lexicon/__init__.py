@@ -21,15 +21,16 @@ DICTIONARY_API_URL = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/?wor
 def strip_html_tags(text):
   return re.sub(r'<[^>]+>', '', text)
 
-def play_with_ffplay(audio_url, speed=100):
+def play_with_ffplay(audio_url, speed=100, volume=100):
   try:
     ffplay_path = os.path.join(os.path.dirname(__file__), "bin", "ffplay.exe")
     rate = max(50, min(speed, 200)) / 100  # Clamp between 0.5x and 2x
+    vol = max(0, min(volume, 100))         # Clamp between 0 and 100
     subprocess.Popen([
       ffplay_path,
       "-nodisp",
       "-autoexit",
-      "-af", f"atempo={rate:.2f}",
+      "-af", f"atempo={rate:.2f},volume={vol / 100:.2f}",
       audio_url
     ])
   except Exception as e:
@@ -201,7 +202,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           audio_url = f"https://media.merriam-webster.com/audio/prons/en/us/mp3/{subfolder}/{audio_id}.mp3"
           print(audio_url)
 
-          app = wx.App(False)
           frame = wx.Frame(None, title="Definition", size=(600, 400))
           panel = wx.Panel(frame)
           sizer = wx.BoxSizer(wx.VERTICAL)
@@ -211,7 +211,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
           def on_play(event):
             speed = speed_slider.GetValue()
-            play_with_ffplay(audio_url, speed)
+            volume = volume_slider.GetValue()
+            play_with_ffplay(audio_url, speed, volume)
 
           play_button = wx.Button(panel, label="Play")
           play_button.Bind(wx.EVT_BUTTON, on_play)
@@ -220,6 +221,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           sizer.Add(speed_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
           speed_slider = wx.Slider(panel, value=100, minValue=50, maxValue=200, style=wx.SL_HORIZONTAL)
           sizer.Add(speed_slider, 0, wx.EXPAND | wx.ALL, 10)
+          volume_label = wx.StaticText(panel, label="Volume:")
+          sizer.Add(volume_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
+          volume_slider = wx.Slider(panel, value=100, minValue=0, maxValue=100, style=wx.SL_HORIZONTAL)
+          sizer.Add(volume_slider, 0, wx.EXPAND | wx.ALL, 10)
 
           ok_button = wx.Button(panel, label="OK")
           ok_button.Bind(wx.EVT_BUTTON, lambda event: frame.Close())
@@ -227,7 +232,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
           panel.SetSizer(sizer)
           frame.Show()
-          app.MainLoop()
+          frame.Raise()
 
         except Exception as e:
           ui.message(f"Error: {str(e)}")
