@@ -10,7 +10,10 @@ import re
 import wx
 from scriptHandler import script
 import config
+import gui
+from gui.settingsDialogs import SettingsPanel
 from . import thesaurus
+import json
 
 addon_dir = os.path.dirname(__file__)
 if addon_dir not in sys.path:
@@ -140,12 +143,28 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
   def __init__(self):
     super().__init__()
+    gui.settingsDialogs.NVDASettingsDialog.categoryClasses.append(MwWordLexiconSettingsPanel)
     self.last_definition_press_time = None
     self.last_wotd_press_time = None
     self.last_definition_text = None
     self.word_of_the_day_text = None
     if "mwWordLexicon" not in config.conf:
       config.conf.createSection("mwWordLexicon")
+    try:
+      self.history_size = int(config.conf["mwWordLexicon"].get("history_size", 3))
+    except:
+      self.history_size = 3
+    hist_json = config.conf["mwWordLexicon"].get("history_json", "[]")
+    try:
+      parsed = json.loads(hist_json)
+      if isinstance(parsed, list):
+        GlobalPlugin.history = parsed
+      else:
+        GlobalPlugin.history = []
+    except:
+      GlobalPlugin.history = []
+    GlobalPlugin.historyIndex = -1
+    GlobalPlugin.restoring = False
     self.copy_mode = int(config.conf["mwWordLexicon"].get("copy_mode", 1))
     self.last_copy_mode2_press_time = None
     self.last_thesaurus_press_time = None
@@ -154,12 +173,25 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.last_antonyms_text = None
 
   def _addToHistory(self, text):
-    if not api.getClipData() or api.getClipData().strip() != text.strip():
+    try:
+      clip = api.getClipData()
+    except:
+      clip = None
+    if not clip or clip.strip() != text.strip():
       return
     if not GlobalPlugin.history or text != GlobalPlugin.history[-1]:
       GlobalPlugin.history.append(text)
-      if len(GlobalPlugin.history) > 3:
+      try:
+        max_size = int(config.conf["mwWordLexicon"].get("history_size", getattr(self, "history_size", 3)))
+      except:
+        max_size = getattr(self, "history_size", 3)
+      while len(GlobalPlugin.history) > max_size:
         GlobalPlugin.history.pop(0)
+      try:
+        config.conf["mwWordLexicon"]["history_json"] = json.dumps(GlobalPlugin.history, ensure_ascii=False)
+        config.save()
+      except:
+        pass
     GlobalPlugin.historyIndex = -1
 
   def get_word_definition(self, word):
@@ -226,6 +258,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       api.copyToClip(text)
       self._addToHistory(text)
       self.last_definition_text = text
+
+  def terminate(self):
+    try:
+      NVDASettingsDialog.categoryClasses.remove(MwWordLexiconSettingsPanel)
+    except (ValueError, AttributeError):
+      pass
 
   @script(description="Cycle copy/display modes", gesture="kb:control+shift+a")
   def script_cycle_copy_mode(self, gesture):
@@ -314,24 +352,58 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.last_selected_word = word
     self.handle_output(self.word_of_the_day_text)
 
-  @script(description="Cycle through previously retrieved word definitions.", gesture="kb:control+shift+h")
-  def script_cycle_previous_definitions(self, gesture):
+  @script(
+    description="Show history list (copy item with Enter or Copy button)", 
+    gesture="kb:control+shift+h"
+    )
+  def script_show_history_list(self, gesture):
     if not GlobalPlugin.history:
       ui.message("No history available.")
       return
-    if not GlobalPlugin.restoring:
-      GlobalPlugin.restoring = True
-      GlobalPlugin.historyIndex = len(GlobalPlugin.history) - 1
-    else:
-      GlobalPlugin.historyIndex -= 1
-    if GlobalPlugin.historyIndex < 0:
-      ui.message("Reached the beginning of history.")
-      GlobalPlugin.restoring = False
-      GlobalPlugin.historyIndex = -1
-      return
-    text = GlobalPlugin.history[GlobalPlugin.historyIndex]
-    api.copyToClip(text)
-    ui.message(text)
+    try:
+      frame = wx.Frame(None, title="mwWordLexicon — History", size=(700, 400))
+      panel = wx.Panel(frame)
+      sizer = wx.BoxSizer(wx.VERTICAL)
+      lbl = wx.StaticText(panel, label="Select an item and press Enter or 'Copy' to copy to clipboard:")
+      sizer.Add(lbl, 0, wx.EXPAND | wx.ALL, 8)
+      items = list(reversed(GlobalPlugin.history))
+      lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
+      sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
+      btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+      copy_btn = wx.Button(panel, label="Copy")
+      close_btn = wx.Button(panel, label="Close")
+      btn_sizer.Add(copy_btn, 0, wx.RIGHT, 8)
+      btn_sizer.Add(close_btn, 0)
+      sizer.Add(btn_sizer, 0, wx.ALIGN_CENTER | wx.ALL, 8)
+      def do_copy_selected():
+        sel = lb.GetSelection()
+        if sel == wx.NOT_FOUND:
+          ui.message("No item selected.")
+          return
+        text = lb.GetString(sel)
+        try:
+          api.copyToClip(text)
+          ui.message("History item copied to clipboard.")
+        except:
+          ui.message("Failed to copy item.")
+      copy_btn.Bind(wx.EVT_BUTTON, lambda evt: do_copy_selected())
+      close_btn.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
+      def on_dclick(evt):
+        do_copy_selected()
+      lb.Bind(wx.EVT_LISTBOX_DCLICK, on_dclick)
+      def on_key(evt):
+        key = evt.GetKeyCode()
+        if key == wx.WXK_RETURN:
+          do_copy_selected()
+        else:
+          evt.Skip()
+      lb.Bind(wx.EVT_CHAR_HOOK, on_key)
+      panel.SetSizer(sizer)
+      frame.Show()
+      frame.Raise()
+      wx.CallAfter(lb.SetFocus)
+    except:
+      ui.message("History UI error.")
 
   @script(
       description="Get thesaurus (synonyms) for the selected word.", 
@@ -386,3 +458,33 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       self.handle_output(antonyms)
     else:
       ui.message("No antonyms found.")
+
+SECTION = "mwWordLexicon"
+
+class MwWordLexiconSettingsPanel(SettingsPanel):
+  title = "MW Word Lexicon"
+
+  def makeSettings(self, sizer):
+    if SECTION not in config.conf:
+      config.conf.createSection(SECTION)
+    
+    current_size = int(config.conf[SECTION].get("history_size", "3"))
+    
+    history_label = wx.StaticText(self, label="History size (number of items to keep):")
+    sizer.Add(history_label, 0, wx.ALL, 5)
+    
+    self.history_spin = wx.SpinCtrl(self, value=str(current_size), min=1, max=100)
+    sizer.Add(self.history_spin, 0, wx.EXPAND | wx.ALL, 5)
+
+  def onSave(self):
+    self.save()
+
+  def save(self):
+    new_size = self.history_spin.GetValue()
+    config.conf[SECTION]["history_size"] = new_size
+    for plugin in globalPluginHandler.runningPlugins:
+      if hasattr(plugin, "script_get_definition_with_smart_copy"):
+        plugin.history_size = new_size
+        while len(plugin.history) > new_size:
+          plugin.history.pop(0)
+        break
