@@ -177,22 +177,33 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.last_antonyms_press_time = None
     self.last_antonyms_text = None
 
+  def _updateAndSaveHistory(self, new_history):
+    GlobalPlugin.history = new_history
+    try:
+      config.conf["mwWordLexicon"]["history_json"] = json.dumps(GlobalPlugin.history, ensure_ascii=False)
+      config.save()
+    except Exception as e:
+      print(f"Failed to save history: {e}")
+
   def _addToHistory(self, text):
     if not text:
       return
-    if not GlobalPlugin.history or text != GlobalPlugin.history[-1]:
-      GlobalPlugin.history.append(text)
-      try:
-        max_size = int(config.conf["mwWordLexicon"].get("history_size", getattr(self, "history_size", 3)))
-      except:
-        max_size = getattr(self, "history_size", 3)
-      while len(GlobalPlugin.history) > max_size:
-        GlobalPlugin.history.pop(0)
-      try:
-        config.conf["mwWordLexicon"]["history_json"] = json.dumps(GlobalPlugin.history, ensure_ascii=False)
-        config.save()
-      except:
-        pass
+    
+    current_history = list(GlobalPlugin.history)
+    if text in current_history:
+      current_history.remove(text)
+    
+    current_history.append(text)
+    
+    try:
+      max_size = int(config.conf["mwWordLexicon"].get("history_size", getattr(self, "history_size", 3)))
+    except:
+      max_size = getattr(self, "history_size", 3)
+      
+    while len(current_history) > max_size:
+      current_history.pop(0)
+      
+    self._updateAndSaveHistory(current_history)
     GlobalPlugin.historyIndex = -1
 
   def get_word_definition(self, word):
@@ -394,18 +405,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         frame = wx.Frame(None, title="mwWordLexicon — History", size=(700, 400))
         panel = wx.Panel(frame)
         sizer = wx.BoxSizer(wx.VERTICAL)
-        lbl = wx.StaticText(panel, label="Select an item and press Enter or 'Copy' to copy to clipboard:")
+        lbl = wx.StaticText(panel, label="Right-click for options or use keyboard shortcuts:")
         sizer.Add(lbl, 0, wx.EXPAND | wx.ALL, 8)
+        
         items = list(reversed(GlobalPlugin.history))
         lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
         sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
-        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        copy_btn = wx.Button(panel, label="Copy")
+        
         close_btn = wx.Button(panel, label="Close")
-        btn_sizer.Add(copy_btn, 0, wx.RIGHT, 8)
-        btn_sizer.Add(close_btn, 0)
-        sizer.Add(btn_sizer, 0, wx.ALIGN_CENTER | wx.ALL, 8)
-        def do_copy_selected():
+        sizer.Add(close_btn, 0, wx.ALIGN_CENTER | wx.ALL, 8)
+
+        # Action Functions
+        def do_copy_selected(event=None):
           sel = lb.GetSelection()
           if sel == wx.NOT_FOUND:
             ui.message("No item selected.")
@@ -413,27 +424,91 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           text = lb.GetString(sel)
           try:
             api.copyToClip(text)
-            ui.message("History item copied to clipboard.")
+            ui.message("History item copied.")
           except:
             ui.message("Failed to copy item.")
-        copy_btn.Bind(wx.EVT_BUTTON, lambda evt: do_copy_selected())
+
+        def do_copy_all(event=None):
+          all_items = "\n\n".join(lb.GetItems())
+          if not all_items:
+            ui.message("History is empty.")
+            return
+          try:
+            api.copyToClip(all_items)
+            ui.message("All history items copied.")
+          except:
+            ui.message("Failed to copy all items.")
+        
+        def do_remove_selected(event=None):
+          sel = lb.GetSelection()
+          if sel == wx.NOT_FOUND:
+            ui.message("No item selected.")
+            return
+          
+          # Remove from data source (GlobalPlugin.history is reversed in UI)
+          original_index = len(GlobalPlugin.history) - 1 - sel
+          GlobalPlugin.history.pop(original_index)
+          self._updateAndSaveHistory(GlobalPlugin.history)
+          
+          # Remove from UI
+          lb.Delete(sel)
+          ui.message("Item removed.")
+          
+          if lb.GetCount() > 0:
+            new_sel = min(sel, lb.GetCount() - 1)
+            lb.SetSelection(new_sel)
+
+        def do_clear_history(event=None):
+          dialog = wx.MessageDialog(frame, "Are you sure you want to clear the entire history?", "Confirm Clear", wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING)
+          if dialog.ShowModal() == wx.ID_YES:
+            self._updateAndSaveHistory([])
+            lb.Clear()
+            ui.message("History cleared.")
+            frame.Close()
+          dialog.Destroy()
+
+        # Context Menu
+        ID_COPY = wx.NewIdRef()
+        ID_COPY_ALL = wx.NewIdRef()
+        ID_REMOVE = wx.NewIdRef()
+        ID_CLEAR = wx.NewIdRef()
+
+        def on_context_menu(event):
+          menu = wx.Menu()
+          menu.Append(ID_COPY, "Copy\tCtrl+C")
+          menu.Append(ID_COPY_ALL, "Copy All History Items\tCtrl+Shift+C")
+          menu.AppendSeparator()
+          menu.Append(ID_REMOVE, "Remove Current History Item\tDelete")
+          menu.Append(ID_CLEAR, "Clear History\tShift+Delete")
+          
+          frame.PopupMenu(menu)
+          menu.Destroy()
+
+        lb.Bind(wx.EVT_CONTEXT_MENU, on_context_menu)
+        
+        # Event Bindings
+        frame.Bind(wx.EVT_MENU, do_copy_selected, id=ID_COPY)
+        frame.Bind(wx.EVT_MENU, do_copy_all, id=ID_COPY_ALL)
+        frame.Bind(wx.EVT_MENU, do_remove_selected, id=ID_REMOVE)
+        frame.Bind(wx.EVT_MENU, do_clear_history, id=ID_CLEAR)
         close_btn.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
-        def on_dclick(evt):
-          do_copy_selected()
-        lb.Bind(wx.EVT_LISTBOX_DCLICK, on_dclick)
-        def on_key(evt):
-          key = evt.GetKeyCode()
-          if key == wx.WXK_RETURN:
-            do_copy_selected()
-          else:
-            evt.Skip()
-        lb.Bind(wx.EVT_CHAR_HOOK, on_key)
+
+        # Accelerator Table for shortcuts
+        accel_tbl = wx.AcceleratorTable([
+          (wx.ACCEL_CTRL, ord('C'), ID_COPY),
+          (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord('C'), ID_COPY_ALL),
+          (wx.ACCEL_NORMAL, wx.WXK_DELETE, ID_REMOVE),
+          (wx.ACCEL_SHIFT, wx.WXK_DELETE, ID_CLEAR)
+        ])
+        frame.SetAcceleratorTable(accel_tbl)
+        
         panel.SetSizer(sizer)
         frame.Show()
         frame.Raise()
         wx.CallAfter(lb.SetFocus)
-      except:
-        ui.message("History UI error.")
+      except Exception as e:
+        ui.message(f"History UI error: {e}")
+
 
   @script(
       description="Get thesaurus (synonyms) for the selected word.",
