@@ -14,6 +14,7 @@ import gui
 from gui.settingsDialogs import SettingsPanel
 from . import thesaurus
 import json
+import threading
 
 addon_dir = os.path.dirname(__file__)
 if addon_dir not in sys.path:
@@ -85,29 +86,32 @@ def extract_all_examples(entry, keyword):
   return examples
 
 def get_word_definition_from_proxy(word):
-  response = requests.get(DICTIONARY_API_URL.format(word))
-  if response.status_code == 200:
-    try:
-      data = response.json()
-      if data and isinstance(data, list):
-        all_definitions = []
-        all_examples = []
-        for entry in data:
-          if not isinstance(entry, dict): continue
-          all_definitions.extend(entry.get("shortdef", []))
-          all_examples.extend(extract_all_examples(entry, word))
+  try:
+    response = requests.get(DICTIONARY_API_URL.format(word))
+    if response.status_code == 200:
+      try:
+        data = response.json()
+        if data and isinstance(data, list):
+          all_definitions = []
+          all_examples = []
+          for entry in data:
+            if not isinstance(entry, dict): continue
+            all_definitions.extend(entry.get("shortdef", []))
+            all_examples.extend(extract_all_examples(entry, word))
 
-        if not all_definitions and not all_examples:
-          return "No definitions found."
+          if not all_definitions and not all_examples:
+            return "No definitions found."
 
-        result = f"{word}:\n"
-        if all_definitions:
-          result += "Definitions:\n" + "\n".join(f"{i+1}. {d}" for i, d in enumerate(all_definitions))
-        if all_examples:
-          result += "\n\nExamples:\n" + "\n".join(f"{i+1}. {ex}" for i, ex in enumerate(all_examples))
-        return result.strip()
-    except Exception as e:
-      print(f"Error parsing definition: {e}")
+          result = f"{word}:\n"
+          if all_definitions:
+            result += "Definitions:\n" + "\n".join(f"{i+1}. {d}" for i, d in enumerate(all_definitions))
+          if all_examples:
+            result += "\n\nExamples:\n" + "\n".join(f"{i+1}. {ex}" for i, ex in enumerate(all_examples))
+          return result.strip()
+      except Exception as e:
+        print(f"Error parsing definition: {e}")
+  except requests.RequestException:
+    return "Failed to connect to the dictionary service."
   return None
 
 def get_selected_text():
@@ -166,6 +170,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     GlobalPlugin.historyIndex = -1
     GlobalPlugin.restoring = False
     self.copy_mode = int(config.conf["mwWordLexicon"].get("copy_mode", 1))
+    self.cycle_history = str(config.conf["mwWordLexicon"].get("cycle_history", False)).lower() == 'true'
     self.last_copy_mode2_press_time = None
     self.last_thesaurus_press_time = None
     self.last_thesaurus_text = None
@@ -173,11 +178,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.last_antonyms_text = None
 
   def _addToHistory(self, text):
-    try:
-      clip = api.getClipData()
-    except:
-      clip = None
-    if not clip or clip.strip() != text.strip():
+    if not text:
       return
     if not GlobalPlugin.history or text != GlobalPlugin.history[-1]:
       GlobalPlugin.history.append(text)
@@ -204,34 +205,39 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       ui.message(text)
     elif self.copy_mode == 1:
       ui.message(text)
-      self.last_definition_text = text
     elif self.copy_mode == 2:
-      def show_dialog_with_audio(text, word):
+      def fetch_audio_and_show_dialog(text, word):
         try:
           response = requests.get(DICTIONARY_API_URL.format(word))
           if response.status_code != 200:
-            ui.message("Failed to retrieve audio data.")
+            wx.CallAfter(ui.message, "Failed to retrieve audio data.")
             return
 
           data = response.json()
           audio_id = data[0].get('hwi', {}).get('prs', [{}])[0].get('sound', {}).get('audio')
           if not audio_id:
-            ui.message("No pronunciation audio available.")
-            return
+            wx.CallAfter(ui.message, "No pronunciation audio available.")
+            audio_url = None
+          else:
+            subfolder = audio_id[0]
+            audio_url = f"https://media.merriam-webster.com/audio/prons/en/us/mp3/{subfolder}/{audio_id}.mp3"
+          
+          wx.CallAfter(create_and_show_dialog, text, audio_url)
 
-          subfolder = audio_id[0]
-          audio_url = f"https://media.merriam-webster.com/audio/prons/en/us/mp3/{subfolder}/{audio_id}.mp3"
+        except Exception as e:
+          wx.CallAfter(ui.message, f"Error: {str(e)}")
 
-          frame = wx.Frame(None, title="Definition", size=(600, 400))
-          panel = wx.Panel(frame)
-          sizer = wx.BoxSizer(wx.VERTICAL)
+      def create_and_show_dialog(text, audio_url):
+        frame = wx.Frame(None, title="Definition", size=(600, 400))
+        panel = wx.Panel(frame)
+        sizer = wx.BoxSizer(wx.VERTICAL)
 
-          text_ctrl = wx.TextCtrl(panel, value=text, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
-          sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
+        text_ctrl = wx.TextCtrl(panel, value=text, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
+        sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
 
+        if audio_url:
           play_button = wx.Button(panel, label="Play")
           sizer.Add(play_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
-          play_button.Bind(wx.EVT_BUTTON, lambda evt: play_with_ffplay(audio_url, speed_slider.GetValue(), volume_slider.GetValue()))
 
           speed_label = wx.StaticText(panel, label="Speed:")
           sizer.Add(speed_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
@@ -242,19 +248,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           sizer.Add(volume_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
           volume_slider = wx.Slider(panel, value=100, minValue=0, maxValue=100, style=wx.SL_HORIZONTAL)
           sizer.Add(volume_slider, 0, wx.EXPAND | wx.ALL, 10)
+          
+          play_button.Bind(wx.EVT_BUTTON, lambda evt: play_with_ffplay(audio_url, speed_slider.GetValue(), volume_slider.GetValue()))
 
-          ok_button = wx.Button(panel, label="OK")
-          ok_button.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
-          sizer.Add(ok_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
+        ok_button = wx.Button(panel, label="OK")
+        ok_button.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
+        sizer.Add(ok_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
 
-          panel.SetSizer(sizer)
-          frame.Show()
-          frame.Raise()
+        panel.SetSizer(sizer)
+        frame.Show()
+        frame.Raise()
 
-        except Exception as e:
-          ui.message(f"Error: {str(e)}")
-
-      wx.CallAfter(show_dialog_with_audio, text, self.last_selected_word)
+      audio_thread = threading.Thread(target=fetch_audio_and_show_dialog, args=(text, self.last_selected_word))
+      audio_thread.daemon = True
+      audio_thread.start()
+      
       api.copyToClip(text)
       self._addToHistory(text)
       self.last_definition_text = text
@@ -264,6 +272,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       NVDASettingsDialog.categoryClasses.remove(MwWordLexiconSettingsPanel)
     except (ValueError, AttributeError):
       pass
+
+  def threaded_request(self, target_func, *args):
+    def worker():
+      result = target_func(*args)
+      def on_complete():
+        if result:
+          self.handle_output(result)
+        else:
+          ui.message("Not found.")
+      wx.CallAfter(on_complete)
+    
+    thread = threading.Thread(target=worker)
+    thread.daemon = True
+    thread.start()
 
   @script(description="Cycle copy/display modes", gesture="kb:control+shift+a")
   def script_cycle_copy_mode(self, gesture):
@@ -276,7 +298,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     ui.message(["Auto copy", "Double press to copy", "Copy and show dialog"][self.copy_mode])
 
   @script(
-      description="Get word definition or copy last one if pressed quickly twice.", 
+      description="Get word definition or copy last one if pressed quickly twice.",
       gesture="kb:control+shift+d"
       )
   def script_get_definition_with_smart_copy(self, gesture):
@@ -305,15 +327,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     if not word:
       return
     self.last_selected_word = word
-    definition = self.get_word_definition(word)
-    if definition:
-      self.last_definition_text = definition
-      self.handle_output(definition)
-    else:
-      ui.message("Definition not found.")
+    self.threaded_request(self.get_word_definition, word)
 
   @script(
-      description="Get Word of the Day with examples or copy them on quick second press.", 
+      description="Get Word of the Day with examples or copy them on quick second press.",
       gesture="kb:control+shift+w"
       )
   def script_word_of_the_day(self, gesture):
@@ -328,85 +345,98 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         return
     self.last_wotd_press_time = now
 
-    raw = get_word_of_the_day()
-    if not raw:
-      ui.message("Failed to retrieve Word of the Day.")
-      return
+    def get_full_wotd():
+      raw = get_word_of_the_day()
+      if not raw:
+        return "Failed to retrieve Word of the Day."
 
-    word = raw.split(" - ")[0].strip()
-    message = f"Word of the Day: {raw}"
+      word = raw.split(" - ")[0].strip()
+      message = f"Word of the Day: {raw}"
 
-    try:
-      response = requests.get(DICTIONARY_API_URL.format(word))
-      if response.status_code == 200:
-        data = response.json()
-        examples = []
-        for entry in data:
-          examples += extract_all_examples(entry, word)
-        if examples:
-          message += "\n\nExamples:\n" + "\n".join(f"{i+1}. {ex}" for i, ex in enumerate(examples))
-    except Exception as e:
-      print(f"Error extracting examples: {e}")
+      try:
+        response = requests.get(DICTIONARY_API_URL.format(word))
+        if response.status_code == 200:
+          data = response.json()
+          examples = []
+          for entry in data:
+            examples += extract_all_examples(entry, word)
+          if examples:
+            message += "\n\nExamples:\n" + "\n".join(f"{i+1}. {ex}" for i, ex in enumerate(examples))
+      except Exception as e:
+        print(f"Error extracting examples: {e}")
 
-    self.word_of_the_day_text = message.strip()
-    self.last_selected_word = word
-    self.handle_output(self.word_of_the_day_text)
+      self.word_of_the_day_text = message.strip()
+      self.last_selected_word = word
+      return self.word_of_the_day_text
+    
+    self.threaded_request(get_full_wotd)
 
   @script(
-    description="Show history list (copy item with Enter or Copy button)", 
+    description="Show or cycle through history",
     gesture="kb:control+shift+h"
     )
   def script_show_history_list(self, gesture):
     if not GlobalPlugin.history:
       ui.message("No history available.")
       return
-    try:
-      frame = wx.Frame(None, title="mwWordLexicon — History", size=(700, 400))
-      panel = wx.Panel(frame)
-      sizer = wx.BoxSizer(wx.VERTICAL)
-      lbl = wx.StaticText(panel, label="Select an item and press Enter or 'Copy' to copy to clipboard:")
-      sizer.Add(lbl, 0, wx.EXPAND | wx.ALL, 8)
-      items = list(reversed(GlobalPlugin.history))
-      lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
-      sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
-      btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
-      copy_btn = wx.Button(panel, label="Copy")
-      close_btn = wx.Button(panel, label="Close")
-      btn_sizer.Add(copy_btn, 0, wx.RIGHT, 8)
-      btn_sizer.Add(close_btn, 0)
-      sizer.Add(btn_sizer, 0, wx.ALIGN_CENTER | wx.ALL, 8)
-      def do_copy_selected():
-        sel = lb.GetSelection()
-        if sel == wx.NOT_FOUND:
-          ui.message("No item selected.")
-          return
-        text = lb.GetString(sel)
-        try:
-          api.copyToClip(text)
-          ui.message("History item copied to clipboard.")
-        except:
-          ui.message("Failed to copy item.")
-      copy_btn.Bind(wx.EVT_BUTTON, lambda evt: do_copy_selected())
-      close_btn.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
-      def on_dclick(evt):
-        do_copy_selected()
-      lb.Bind(wx.EVT_LISTBOX_DCLICK, on_dclick)
-      def on_key(evt):
-        key = evt.GetKeyCode()
-        if key == wx.WXK_RETURN:
+
+    if self.cycle_history:
+      GlobalPlugin.historyIndex = (GlobalPlugin.historyIndex + 1) % len(GlobalPlugin.history)
+      reversed_history = list(reversed(GlobalPlugin.history))
+      item_to_copy = reversed_history[GlobalPlugin.historyIndex]
+      try:
+        api.copyToClip(item_to_copy)
+        ui.message(item_to_copy)
+      except Exception as e:
+        ui.message(f"Failed to copy history item: {e}")
+    else:
+      try:
+        frame = wx.Frame(None, title="mwWordLexicon — History", size=(700, 400))
+        panel = wx.Panel(frame)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        lbl = wx.StaticText(panel, label="Select an item and press Enter or 'Copy' to copy to clipboard:")
+        sizer.Add(lbl, 0, wx.EXPAND | wx.ALL, 8)
+        items = list(reversed(GlobalPlugin.history))
+        lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
+        sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        copy_btn = wx.Button(panel, label="Copy")
+        close_btn = wx.Button(panel, label="Close")
+        btn_sizer.Add(copy_btn, 0, wx.RIGHT, 8)
+        btn_sizer.Add(close_btn, 0)
+        sizer.Add(btn_sizer, 0, wx.ALIGN_CENTER | wx.ALL, 8)
+        def do_copy_selected():
+          sel = lb.GetSelection()
+          if sel == wx.NOT_FOUND:
+            ui.message("No item selected.")
+            return
+          text = lb.GetString(sel)
+          try:
+            api.copyToClip(text)
+            ui.message("History item copied to clipboard.")
+          except:
+            ui.message("Failed to copy item.")
+        copy_btn.Bind(wx.EVT_BUTTON, lambda evt: do_copy_selected())
+        close_btn.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
+        def on_dclick(evt):
           do_copy_selected()
-        else:
-          evt.Skip()
-      lb.Bind(wx.EVT_CHAR_HOOK, on_key)
-      panel.SetSizer(sizer)
-      frame.Show()
-      frame.Raise()
-      wx.CallAfter(lb.SetFocus)
-    except:
-      ui.message("History UI error.")
+        lb.Bind(wx.EVT_LISTBOX_DCLICK, on_dclick)
+        def on_key(evt):
+          key = evt.GetKeyCode()
+          if key == wx.WXK_RETURN:
+            do_copy_selected()
+          else:
+            evt.Skip()
+        lb.Bind(wx.EVT_CHAR_HOOK, on_key)
+        panel.SetSizer(sizer)
+        frame.Show()
+        frame.Raise()
+        wx.CallAfter(lb.SetFocus)
+      except:
+        ui.message("History UI error.")
 
   @script(
-      description="Get thesaurus (synonyms) for the selected word.", 
+      description="Get thesaurus (synonyms) for the selected word.",
       gesture="kb:control+shift+t"
       )
   def script_get_thesaurus(self, gesture):
@@ -425,15 +455,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     if not word:
       return
     self.last_selected_word = word
-    synonyms = thesaurus.get_word_thesaurus(word)
-    if synonyms:
-      self.last_thesaurus_text = synonyms
-      self.handle_output(synonyms)
-    else:
-      ui.message("No synonyms found.")
+    self.threaded_request(thesaurus.get_word_thesaurus, word)
 
   @script(
-      description="Get antonyms for the selected word.", 
+      description="Get antonyms for the selected word.",
       gesture="kb:control+shift+u"
       )
   def script_get_antonyms(self, gesture):
@@ -452,12 +477,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     if not word:
       return
     self.last_selected_word = word
-    antonyms = thesaurus.get_word_antonyms(word)
-    if antonyms:
-      self.last_antonyms_text = antonyms
-      self.handle_output(antonyms)
-    else:
-      ui.message("No antonyms found.")
+    self.threaded_request(thesaurus.get_word_antonyms, word)
 
 SECTION = "mwWordLexicon"
 
@@ -469,22 +489,31 @@ class MwWordLexiconSettingsPanel(SettingsPanel):
       config.conf.createSection(SECTION)
     
     current_size = int(config.conf[SECTION].get("history_size", "3"))
+    cycle_history = str(config.conf[SECTION].get("cycle_history", False)).lower() == 'true'
     
+    settings_sizer = wx.StaticBoxSizer(wx.VERTICAL, self, label="Settings")
+
     history_label = wx.StaticText(self, label="History size (number of items to keep):")
-    sizer.Add(history_label, 0, wx.ALL, 5)
+    settings_sizer.Add(history_label, 0, wx.ALL, 5)
     
     self.history_spin = wx.SpinCtrl(self, value=str(current_size), min=1, max=100)
-    sizer.Add(self.history_spin, 0, wx.EXPAND | wx.ALL, 5)
+    settings_sizer.Add(self.history_spin, 0, wx.EXPAND | wx.ALL, 5)
+    
+    self.cycle_history_cb = wx.CheckBox(self, label="Cycle through history directly (copies each item)")
+    self.cycle_history_cb.SetValue(cycle_history)
+    settings_sizer.Add(self.cycle_history_cb, 0, wx.ALL, 5)
+    
+    sizer.Add(settings_sizer, 0, wx.EXPAND | wx.ALL, 5)
 
   def onSave(self):
-    self.save()
-
-  def save(self):
     new_size = self.history_spin.GetValue()
     config.conf[SECTION]["history_size"] = new_size
+    config.conf[SECTION]["cycle_history"] = self.cycle_history_cb.GetValue()
+    
     for plugin in globalPluginHandler.runningPlugins:
       if hasattr(plugin, "script_get_definition_with_smart_copy"):
         plugin.history_size = new_size
+        plugin.cycle_history = self.cycle_history_cb.GetValue()
         while len(plugin.history) > new_size:
           plugin.history.pop(0)
         break
