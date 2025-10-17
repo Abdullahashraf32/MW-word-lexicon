@@ -274,6 +274,27 @@ def handle_double_press(last_time, current_time, cached_text, label="Text"):
       return "empty"
   return "no"
 
+def _get_history_retention_seconds():
+  try:
+    unit = str(config.conf["mwWordLexicon"].get("history_retention_unit", "days")).lower()
+    value = int(config.conf["mwWordLexicon"].get("history_retention_value", 0))
+    if value <= 0:
+      return 0
+    if unit in ("minute", "minutes", "min", "m"):
+      return value * 60
+    if unit in ("hour", "hours", "h"):
+      return value * 3600
+    return value * 24 * 3600
+  except Exception:
+    return 0
+
+def _prune_history_by_retention(history_list):
+  seconds = _get_history_retention_seconds()
+  if not seconds:
+    return history_list
+  cutoff = time.time() - seconds
+  return [item for item in history_list if item.get("ts", 0) >= cutoff]
+
 class SearchDialog(wx.Frame):
   def __init__(self, parent, pre_filled_text=""):
     super(SearchDialog, self).__init__(parent, title="Search Dictionary", size=(600, 450))
@@ -383,10 +404,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     try:
       parsed = json.loads(hist_json)
       if isinstance(parsed, list):
-        GlobalPlugin.history = parsed
+        normalized = []
+        now = time.time()
+        for item in parsed:
+          if isinstance(item, dict) and "text" in item:
+            text = item.get("text") or ""
+            ts = float(item.get("ts", 0))
+            normalized.append({"text": text, "ts": ts})
+          elif isinstance(item, str):
+            normalized.append({"text": item, "ts": 0.0})
+        GlobalPlugin.history = normalized
       else:
         GlobalPlugin.history = []
-    except:
+    except Exception:
       GlobalPlugin.history = []
     GlobalPlugin.historyIndex = -1
     GlobalPlugin.restoring = False
@@ -397,12 +427,45 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.last_thesaurus_text = None
     self.last_antonyms_press_time = None
     self.last_antonyms_text = None
+    self._retention_stop_event = threading.Event()
+    self._retention_thread = threading.Thread(target=self._retention_worker)
+    self._retention_thread.daemon = True
+    self._retention_thread.start()
+    try:
+      self._periodic_prune_check()
+    except Exception:
+      pass
 
-  def _updateAndSaveHistory(self, new_history):
-    GlobalPlugin.history = new_history
+  def _updateAndSaveHistory(self, new_history, prune=True):
+    normalized = []
+    now = time.time()
+    for item in new_history:
+      if isinstance(item, dict) and "text" in item:
+        normalized.append({"text": item.get("text") or "", "ts": float(item.get("ts", now))})
+      elif isinstance(item, str):
+        normalized.append({"text": item, "ts": now})
+    if prune:
+      normalized = _prune_history_by_retention(normalized)
+    try:
+      max_size = int(config.conf["mwWordLexicon"].get("history_size", getattr(self, "history_size", 3)))
+    except Exception:
+      max_size = getattr(self, "history_size", 3)
+    normalized.sort(key=lambda x: x.get("ts", 0))
+    while len(normalized) > max_size:
+      normalized.pop(0)
+    GlobalPlugin.history = normalized
     try:
       config.conf["mwWordLexicon"]["history_json"] = json.dumps(GlobalPlugin.history, ensure_ascii=False)
-      config.save()
+      try:
+        save_func = getattr(config, "save", None)
+        if callable(save_func):
+          save_func()
+        else:
+          conf_obj = getattr(config, "conf", None)
+          if conf_obj and hasattr(conf_obj, "write"):
+            conf_obj.write()
+      except Exception:
+        pass
     except Exception as e:
       print(f"Failed to save history: {e}")
 
@@ -410,22 +473,38 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     if not text:
       return
 
+    now = time.time()
     current_history = list(GlobalPlugin.history)
-    if text in current_history:
-      current_history.remove(text)
-
-    current_history.append(text)
-
-    try:
-      max_size = int(config.conf["mwWordLexicon"].get("history_size", getattr(self, "history_size", 3)))
-    except:
-      max_size = getattr(self, "history_size", 3)
-
-    while len(current_history) > max_size:
-      current_history.pop(0)
+    current_history = [h for h in current_history if (h.get("text") if isinstance(h, dict) else h) != text]
+    current_history.append({"text": text, "ts": now})
 
     self._updateAndSaveHistory(current_history)
     GlobalPlugin.historyIndex = -1
+
+  def _periodic_prune_check(self):
+    try:
+      pruned = _prune_history_by_retention(GlobalPlugin.history)
+      if pruned != GlobalPlugin.history:
+        self._updateAndSaveHistory(pruned)
+    except Exception:
+      pass
+
+  def _retention_worker(self):
+    try:
+      while not self._retention_stop_event.wait(30):
+        self._periodic_prune_check()
+    except Exception:
+      pass
+
+  def _stop_retention_thread(self):
+    try:
+      self._retention_stop_event.set()
+      try:
+        self._retention_thread.join(1.0)
+      except Exception:
+        pass
+    except Exception:
+      pass
 
   def get_word_definition(self, word):
     return get_word_definition_from_proxy(word)
@@ -501,6 +580,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
   def terminate(self):
     try:
+      self._stop_retention_thread()
+    except Exception:
+      pass
+    try:
       NVDASettingsDialog.categoryClasses.remove(MwWordLexiconSettingsPanel)
     except (ValueError, AttributeError):
       pass
@@ -524,7 +607,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.copy_mode = (self.copy_mode + 1) % 3
     try:
       config.conf["mwWordLexicon"]["copy_mode"] = self.copy_mode
-      config.save()
+      try:
+        save_func = getattr(config, "save", None)
+        if callable(save_func):
+          save_func()
+        else:
+          conf_obj = getattr(config, "conf", None)
+          if conf_obj and hasattr(conf_obj, "write"):
+            conf_obj.write()
+      except Exception:
+        pass
     except Exception:
       pass
     ui.message(["Auto copy", "Double press to copy", "Copy and show dialog"][self.copy_mode])
@@ -644,7 +736,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         lbl = wx.StaticText(panel, label="Right-click for options or use keyboard shortcuts:")
         sizer.Add(lbl, 0, wx.EXPAND | wx.ALL, 8)
 
-        items = list(reversed(GlobalPlugin.history))
+        items = [entry.get("text") if isinstance(entry, dict) else str(entry) for entry in reversed(GlobalPlugin.history)]
         lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
         sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
 
@@ -795,18 +887,39 @@ class MwWordLexiconSettingsPanel(SettingsPanel):
 
     current_size = int(config.conf[SECTION].get("history_size", "3"))
     cycle_history = str(config.conf[SECTION].get("cycle_history", False)).lower() == 'true'
+    current_retention_value = int(config.conf[SECTION].get("history_retention_value", "0"))
+    current_retention_unit = str(config.conf[SECTION].get("history_retention_unit", "days"))
 
     settings_sizer = wx.StaticBoxSizer(wx.VERTICAL, self, label="Settings")
 
     history_label = wx.StaticText(self, label="History size (number of items to keep):")
     settings_sizer.Add(history_label, 0, wx.ALL, 5)
 
-    self.history_spin = wx.SpinCtrl(self, value=str(current_size), minValue=1, maxValue=100)
+    self.history_spin = wx.SpinCtrl(self, value=str(current_size), min=1, max=100)
     settings_sizer.Add(self.history_spin, 0, wx.EXPAND | wx.ALL, 5)
 
     self.cycle_history_cb = wx.CheckBox(self, label="Cycle through history directly (copies each item)")
     self.cycle_history_cb.SetValue(cycle_history)
     settings_sizer.Add(self.cycle_history_cb, 0, wx.ALL, 5)
+
+    retention_label = wx.StaticText(self, label="History retention (value + unit, 0 = keep forever):")
+    settings_sizer.Add(retention_label, 0, wx.ALL, 5)
+
+    retention_row = wx.BoxSizer(wx.HORIZONTAL)
+    self.retention_spin = wx.SpinCtrl(self, value=str(current_retention_value), min=0, max=365000)
+    retention_row.Add(self.retention_spin, 0, wx.RIGHT | wx.ALL, 5)
+    choices = ["minutes", "hours", "days"]
+    self.retention_unit = wx.ComboBox(self, choices=choices, style=wx.CB_READONLY)
+    cu = str(current_retention_unit).lower()
+    if cu.startswith("min"):
+      self.retention_unit.SetValue("minutes")
+    elif cu.startswith("hour"):
+      self.retention_unit.SetValue("hours")
+    else:
+      self.retention_unit.SetValue("days")
+    retention_row.Add(self.retention_unit, 0, wx.ALL, 5)
+
+    settings_sizer.Add(retention_row, 0, wx.EXPAND | wx.ALL, 5)
 
     sizer.Add(settings_sizer, 0, wx.EXPAND | wx.ALL, 5)
 
@@ -815,10 +928,44 @@ class MwWordLexiconSettingsPanel(SettingsPanel):
     config.conf[SECTION]["history_size"] = new_size
     config.conf[SECTION]["cycle_history"] = self.cycle_history_cb.GetValue()
 
+    try:
+      retention_value = int(self.retention_spin.GetValue())
+    except Exception:
+      retention_value = 0
+    retention_unit = str(self.retention_unit.GetValue() or "days")
+
+    config.conf[SECTION]["history_retention_value"] = retention_value
+    config.conf[SECTION]["history_retention_unit"] = retention_unit
+
+    try:
+      save_func = getattr(config, "save", None)
+      if callable(save_func):
+        save_func()
+      else:
+        conf_obj = getattr(config, "conf", None)
+        if conf_obj and hasattr(conf_obj, "write"):
+          conf_obj.write()
+    except Exception:
+      pass
+
+    now = time.time()
     for plugin in globalPluginHandler.runningPlugins:
       if hasattr(plugin, "script_get_definition_with_smart_copy"):
         plugin.history_size = new_size
         plugin.cycle_history = self.cycle_history_cb.GetValue()
         while len(plugin.history) > new_size:
           plugin.history.pop(0)
+        try:
+          normalized = []
+          for item in plugin.history:
+            if isinstance(item, dict) and "text" in item:
+              ts = float(item.get("ts", 0))
+              if not ts:
+                ts = now
+              normalized.append({"text": item.get("text") or "", "ts": ts})
+            elif isinstance(item, str):
+              normalized.append({"text": item, "ts": now})
+          plugin._updateAndSaveHistory(normalized, prune=False)
+        except Exception:
+          pass
         break
