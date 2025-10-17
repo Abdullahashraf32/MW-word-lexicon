@@ -27,6 +27,18 @@ except Exception:
     import selection_helper
   except Exception:
     selection_helper = None
+OPEN_DIALOG = None
+
+def _clear_open_dialog(evt, frame):
+  global OPEN_DIALOG
+  try:
+    OPEN_DIALOG = None
+  except Exception:
+    pass
+  try:
+    evt.Skip()
+  except Exception:
+    pass
 
 def _call_selection_helper_for_hwnd(hwnd, out_container):
   try:
@@ -297,7 +309,12 @@ def _prune_history_by_retention(history_list):
 
 class SearchDialog(wx.Frame):
   def __init__(self, parent, pre_filled_text=""):
+    global OPEN_DIALOG
+    if OPEN_DIALOG:
+      ui.message("Please close the open dialog before opening another.")
+      raise RuntimeError("Dialog already open")
     super(SearchDialog, self).__init__(parent, title="Search Dictionary", size=(600, 450))
+    OPEN_DIALOG = self
     panel = wx.Panel(self)
     
     main_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -324,14 +341,39 @@ class SearchDialog(wx.Frame):
     panel.SetSizer(main_sizer)
     
     search_button.Bind(wx.EVT_BUTTON, self.on_search)
-    close_button.Bind(wx.EVT_BUTTON, lambda evt: self.Close())
+    close_button.Bind(wx.EVT_BUTTON, lambda evt: self._do_close())
     self.search_box.Bind(wx.EVT_KEY_UP, self.on_key_up)
+
+    self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+    self.Bind(wx.EVT_CLOSE, self._on_close)
 
     self._auto_focus_results_after_search = bool(pre_filled_text)
 
     if pre_filled_text:
       wx.CallAfter(self.search_box.SetFocus)
       wx.CallLater(80, self.on_search, None)
+
+  def _on_char_hook(self, evt):
+    if evt.GetKeyCode() == wx.WXK_ESCAPE:
+      self._do_close()
+    else:
+      evt.Skip()
+
+  def _do_close(self):
+    global OPEN_DIALOG
+    try:
+      self.Destroy()
+    except Exception:
+      pass
+    OPEN_DIALOG = None
+
+  def _on_close(self, evt):
+    global OPEN_DIALOG
+    OPEN_DIALOG = None
+    try:
+      evt.Skip()
+    except Exception:
+      pass
 
   def on_key_up(self, event):
     if event.GetKeyCode() == wx.WXK_RETURN:
@@ -539,7 +581,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           wx.CallAfter(ui.message, f"Error: {str(e)}")
 
       def create_and_show_dialog(text, audio_url):
+        global OPEN_DIALOG
+        if OPEN_DIALOG:
+          ui.message("Please close the open dialog before opening another.")
+          return
         frame = wx.Frame(None, title="Definition", size=(600, 400))
+        OPEN_DIALOG = frame
         panel = wx.Panel(frame)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -562,10 +609,24 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
           play_button.Bind(wx.EVT_BUTTON, lambda evt: play_with_ffplay(audio_url, speed_slider.GetValue(), volume_slider.GetValue()))
 
+        btn_row = wx.BoxSizer(wx.HORIZONTAL)
         ok_button = wx.Button(panel, label="OK")
-        ok_button.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
-        sizer.Add(ok_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
+        btn_row.Add(ok_button, 0, wx.ALL, 5)
+        cancel_button = wx.Button(panel, label="Cancel")
+        btn_row.Add(cancel_button, 0, wx.ALL, 5)
+        sizer.Add(btn_row, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
 
+        ok_button.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
+        cancel_button.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
+
+        def on_char_hook(evt):
+          if evt.GetKeyCode() == wx.WXK_ESCAPE:
+            frame.Close()
+          else:
+            evt.Skip()
+
+        frame.Bind(wx.EVT_CHAR_HOOK, on_char_hook)
+        frame.Bind(wx.EVT_CLOSE, lambda evt: _clear_open_dialog(evt, frame))
         panel.SetSizer(sizer)
         frame.Show()
         frame.Raise()
@@ -626,6 +687,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       gesture="kb:nvda+alt+a"
       )
   def script_showSearchDialog(self, gesture):
+    global OPEN_DIALOG
+    if OPEN_DIALOG:
+      ui.message("Please close the open dialog before opening another.")
+      return
     selected_text = get_selected_text() or ""
     try:
       dialog = SearchDialog(None, pre_filled_text=selected_text)
@@ -730,16 +795,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         ui.message(f"Failed to copy history item: {e}")
     else:
       try:
+        global OPEN_DIALOG
+        if OPEN_DIALOG:
+          ui.message("Please close the open dialog before opening another.")
+          return
         frame = wx.Frame(None, title="mwWordLexicon — History", size=(700, 400))
+        OPEN_DIALOG = frame
         panel = wx.Panel(frame)
         sizer = wx.BoxSizer(wx.VERTICAL)
         lbl = wx.StaticText(panel, label="Right-click for options or use keyboard shortcuts:")
         sizer.Add(lbl, 0, wx.EXPAND | wx.ALL, 8)
-
+        
         items = [entry.get("text") if isinstance(entry, dict) else str(entry) for entry in reversed(GlobalPlugin.history)]
         lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
         sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
-
+        
         close_btn = wx.Button(panel, label="Close")
         sizer.Add(close_btn, 0, wx.ALIGN_CENTER | wx.ALL, 8)
 
@@ -824,13 +894,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         ])
         frame.SetAcceleratorTable(accel_tbl)
 
+        def on_char_hook(evt):
+          if evt.GetKeyCode() == wx.WXK_ESCAPE:
+            frame.Close()
+          else:
+            evt.Skip()
+
+        frame.Bind(wx.EVT_CHAR_HOOK, on_char_hook)
+        frame.Bind(wx.EVT_CLOSE, lambda evt: _clear_open_dialog(evt, frame))
+
         panel.SetSizer(sizer)
         frame.Show()
         frame.Raise()
         wx.CallAfter(lb.SetFocus)
       except Exception as e:
         ui.message(f"History UI error: {e}")
-
 
   @script(
       description="Get thesaurus (synonyms) for the selected word.",
