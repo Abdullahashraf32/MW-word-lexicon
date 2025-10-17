@@ -20,6 +20,30 @@ addon_dir = os.path.dirname(__file__)
 if addon_dir not in sys.path:
   sys.path.insert(0, addon_dir)
 
+try:
+  from . import selection_helper
+except Exception:
+  try:
+    import selection_helper
+  except Exception:
+    selection_helper = None
+
+def _call_selection_helper_for_hwnd(hwnd, out_container):
+  try:
+    if selection_helper:
+      res = selection_helper.get_selection_for_hwnd(hwnd)
+      out_container.append(res)
+  except Exception:
+    out_container.append(None)
+
+def _call_selection_helper_foreground(out_container):
+  try:
+    if selection_helper:
+      res = selection_helper.get_selection_for_foreground()
+      out_container.append(res)
+  except Exception:
+    out_container.append(None)
+
 DICTIONARY_API_URL = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/?word={}"
 
 def strip_html_tags(text):
@@ -114,13 +138,123 @@ def get_word_definition_from_proxy(word):
     return "Failed to connect to the dictionary service."
   return None
 
+def get_selected_text_via_helper_with_hwnd(hwnd, timeout_seconds=0.5):
+  try:
+    helper = os.path.join(os.path.dirname(__file__), "selection_helper.py")
+    cmd = [sys.executable, helper, str(int(hwnd))]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds)
+    out = proc.stdout.strip()
+    if out:
+      return out
+  except subprocess.TimeoutExpired:
+    return None
+  except Exception:
+    return None
+  return None
+
+def get_selected_text_via_helper(timeout_seconds=0.5):
+  try:
+    helper = os.path.join(os.path.dirname(__file__), "selection_helper.py")
+    cmd = [sys.executable, helper]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds)
+    out = proc.stdout.strip()
+    if out:
+      return out
+  except subprocess.TimeoutExpired:
+    return None
+  except Exception:
+    return None
+  return None
+
 def get_selected_text():
   try:
     reviewPos = api.getReviewPosition()
-    if reviewPos and reviewPos.text:
-      return reviewPos.text.strip()
   except Exception:
-    return None
+    reviewPos = None
+
+  if reviewPos:
+    try:
+      for attr in ("value", "text", "displayText"):
+        try:
+          v = getattr(reviewPos, attr, None)
+        except Exception:
+          v = None
+        if isinstance(v, str) and v.strip():
+          return v.strip()
+      try:
+        if hasattr(reviewPos, "getText"):
+          t = reviewPos.getText(0)
+          if isinstance(t, str) and t.strip():
+            return t.strip()
+      except Exception:
+        pass
+    except Exception:
+      pass
+
+    hwnd_candidates = []
+    try:
+      wh = getattr(reviewPos, "windowHandle", None)
+      if wh is not None:
+        try:
+          hwnd_candidates.append(int(wh))
+        except Exception:
+          try:
+            hwnd_candidates.append(int(getattr(wh, "value", wh)))
+          except Exception:
+            pass
+    except Exception:
+      pass
+    try:
+      wh = getattr(reviewPos, "hwnd", None)
+      if wh is not None:
+        try:
+          hwnd_candidates.append(int(wh))
+        except Exception:
+          try:
+            hwnd_candidates.append(int(getattr(wh, "value", wh)))
+          except Exception:
+            pass
+    except Exception:
+      pass
+    try:
+      appmod = getattr(reviewPos, "appModule", None)
+      if appmod:
+        wh = getattr(appmod, "helperLocalBindingHandle", None)
+        if wh is not None:
+          try:
+            hwnd_candidates.append(int(wh))
+          except Exception:
+            try:
+              hwnd_candidates.append(int(getattr(wh, "value", wh)))
+            except Exception:
+              pass
+    except Exception:
+      pass
+
+    for h in hwnd_candidates:
+      try:
+        out = []
+        th = threading.Thread(target=_call_selection_helper_for_hwnd, args=(h, out))
+        th.daemon = True
+        th.start()
+        th.join(0.9)
+        if out and out[0]:
+          return out[0]
+      except Exception:
+        pass
+
+  try:
+    out = []
+    th = threading.Thread(target=_call_selection_helper_foreground, args=(out,))
+    th.daemon = True
+    th.start()
+    th.join(0.9)
+    if out and out[0]:
+      return out[0]
+  except Exception:
+    pass
+
+  return None
 
 def get_valid_selected_word():
   selected = get_selected_text()
@@ -139,6 +273,93 @@ def handle_double_press(last_time, current_time, cached_text, label="Text"):
       ui.message(f"No recent {label.lower()} to copy.")
       return "empty"
   return "no"
+
+class SearchDialog(wx.Frame):
+  def __init__(self, parent, pre_filled_text=""):
+    super(SearchDialog, self).__init__(parent, title="Search Dictionary", size=(600, 450))
+    panel = wx.Panel(self)
+    
+    main_sizer = wx.BoxSizer(wx.VERTICAL)
+    search_sizer = wx.BoxSizer(wx.HORIZONTAL)
+    
+    self.search_box = wx.TextCtrl(panel, value=pre_filled_text)
+    search_sizer.Add(self.search_box, 1, wx.EXPAND | wx.ALL, 5)
+    
+    self.search_type = wx.ComboBox(panel, choices=["definition", "synonyms", "antonyms"], style=wx.CB_READONLY)
+    self.search_type.SetValue("definition")
+    search_sizer.Add(self.search_type, 0, wx.ALL, 5)
+    
+    search_button = wx.Button(panel, label="Search")
+    search_sizer.Add(search_button, 0, wx.ALL, 5)
+    
+    main_sizer.Add(search_sizer, 0, wx.EXPAND)
+    
+    self.results_area = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
+    main_sizer.Add(self.results_area, 1, wx.EXPAND | wx.ALL, 5)
+    
+    close_button = wx.Button(panel, label="Close")
+    main_sizer.Add(close_button, 0, wx.ALIGN_CENTER | wx.ALL, 5)
+    
+    panel.SetSizer(main_sizer)
+    
+    search_button.Bind(wx.EVT_BUTTON, self.on_search)
+    close_button.Bind(wx.EVT_BUTTON, lambda evt: self.Close())
+    self.search_box.Bind(wx.EVT_KEY_UP, self.on_key_up)
+
+    self._auto_focus_results_after_search = bool(pre_filled_text)
+
+    if pre_filled_text:
+      wx.CallAfter(self.search_box.SetFocus)
+      wx.CallLater(80, self.on_search, None)
+
+  def on_key_up(self, event):
+    if event.GetKeyCode() == wx.WXK_RETURN:
+      self.on_search(None)
+    event.Skip()
+
+  def on_search(self, event):
+    query = self.search_box.GetValue().strip()
+    if not query:
+      return
+    
+    search_type = self.search_type.GetValue()
+    
+    self.results_area.SetValue(f"Searching for {search_type} of '{query}'...")
+    
+    def worker():
+      result = ""
+      try:
+        if search_type == "definition":
+          result = get_word_definition_from_proxy(query)
+        elif search_type == "synonyms":
+          result = thesaurus.get_word_thesaurus(query)
+        elif search_type == "antonyms":
+          result = thesaurus.get_word_antonyms(query)
+      except Exception as e:
+        result = f"An error occurred: {e}"
+      
+      final_result = result or "Not found."
+
+      def on_complete():
+        self.results_area.SetValue(final_result)
+        if search_type == "definition":
+          wx.CallAfter(api.copyToClip, final_result)
+          for plugin in globalPluginHandler.runningPlugins:
+            if isinstance(plugin, GlobalPlugin):
+              wx.CallAfter(plugin._addToHistory, final_result)
+              break
+        if self._auto_focus_results_after_search:
+          try:
+            self.results_area.SetFocus()
+            self._auto_focus_results_after_search = False
+          except Exception:
+            pass
+
+      wx.CallAfter(on_complete)
+      
+    thread = threading.Thread(target=worker)
+    thread.daemon = True
+    thread.start()
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
   history = []
@@ -188,21 +409,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
   def _addToHistory(self, text):
     if not text:
       return
-    
+
     current_history = list(GlobalPlugin.history)
     if text in current_history:
       current_history.remove(text)
-    
+
     current_history.append(text)
-    
+
     try:
       max_size = int(config.conf["mwWordLexicon"].get("history_size", getattr(self, "history_size", 3)))
     except:
       max_size = getattr(self, "history_size", 3)
-      
+
     while len(current_history) > max_size:
       current_history.pop(0)
-      
+
     self._updateAndSaveHistory(current_history)
     GlobalPlugin.historyIndex = -1
 
@@ -232,7 +453,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           else:
             subfolder = audio_id[0]
             audio_url = f"https://media.merriam-webster.com/audio/prons/en/us/mp3/{subfolder}/{audio_id}.mp3"
-          
+
           wx.CallAfter(create_and_show_dialog, text, audio_url)
 
         except Exception as e:
@@ -259,7 +480,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           sizer.Add(volume_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
           volume_slider = wx.Slider(panel, value=100, minValue=0, maxValue=100, style=wx.SL_HORIZONTAL)
           sizer.Add(volume_slider, 0, wx.EXPAND | wx.ALL, 10)
-          
+
           play_button.Bind(wx.EVT_BUTTON, lambda evt: play_with_ffplay(audio_url, speed_slider.GetValue(), volume_slider.GetValue()))
 
         ok_button = wx.Button(panel, label="OK")
@@ -273,7 +494,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       audio_thread = threading.Thread(target=fetch_audio_and_show_dialog, args=(text, self.last_selected_word))
       audio_thread.daemon = True
       audio_thread.start()
-      
+
       api.copyToClip(text)
       self._addToHistory(text)
       self.last_definition_text = text
@@ -293,7 +514,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         else:
           ui.message("Not found.")
       wx.CallAfter(on_complete)
-    
+
     thread = threading.Thread(target=worker)
     thread.daemon = True
     thread.start()
@@ -307,6 +528,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     except Exception:
       pass
     ui.message(["Auto copy", "Double press to copy", "Copy and show dialog"][self.copy_mode])
+
+  @script(
+      description="Open Search Dialog", 
+      gesture="kb:nvda+alt+a"
+      )
+  def script_showSearchDialog(self, gesture):
+    selected_text = get_selected_text() or ""
+    try:
+      dialog = SearchDialog(None, pre_filled_text=selected_text)
+      dialog.Show()
+      dialog.Raise()
+      if selected_text:
+        wx.CallAfter(dialog.on_search, None)
+    except Exception as e:
+      ui.message(f"Error opening search dialog: {e}")
 
   @script(
       description="Get word definition or copy last one if pressed quickly twice.",
@@ -379,7 +615,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       self.word_of_the_day_text = message.strip()
       self.last_selected_word = word
       return self.word_of_the_day_text
-    
+
     self.threaded_request(get_full_wotd)
 
   @script(
@@ -407,15 +643,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         sizer = wx.BoxSizer(wx.VERTICAL)
         lbl = wx.StaticText(panel, label="Right-click for options or use keyboard shortcuts:")
         sizer.Add(lbl, 0, wx.EXPAND | wx.ALL, 8)
-        
+
         items = list(reversed(GlobalPlugin.history))
         lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
         sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
-        
+
         close_btn = wx.Button(panel, label="Close")
         sizer.Add(close_btn, 0, wx.ALIGN_CENTER | wx.ALL, 8)
 
-        # Action Functions
         def do_copy_selected(event=None):
           sel = lb.GetSelection()
           if sel == wx.NOT_FOUND:
@@ -438,22 +673,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             ui.message("All history items copied.")
           except:
             ui.message("Failed to copy all items.")
-        
+
         def do_remove_selected(event=None):
           sel = lb.GetSelection()
           if sel == wx.NOT_FOUND:
             ui.message("No item selected.")
             return
-          
-          # Remove from data source (GlobalPlugin.history is reversed in UI)
+
           original_index = len(GlobalPlugin.history) - 1 - sel
           GlobalPlugin.history.pop(original_index)
           self._updateAndSaveHistory(GlobalPlugin.history)
-          
-          # Remove from UI
+
           lb.Delete(sel)
           ui.message("Item removed.")
-          
+
           if lb.GetCount() > 0:
             new_sel = min(sel, lb.GetCount() - 1)
             lb.SetSelection(new_sel)
@@ -467,7 +700,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             frame.Close()
           dialog.Destroy()
 
-        # Context Menu
         ID_COPY = wx.NewIdRef()
         ID_COPY_ALL = wx.NewIdRef()
         ID_REMOVE = wx.NewIdRef()
@@ -480,20 +712,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           menu.AppendSeparator()
           menu.Append(ID_REMOVE, "Remove Current History Item\tDelete")
           menu.Append(ID_CLEAR, "Clear History\tShift+Delete")
-          
+
           frame.PopupMenu(menu)
           menu.Destroy()
 
         lb.Bind(wx.EVT_CONTEXT_MENU, on_context_menu)
-        
-        # Event Bindings
+
         frame.Bind(wx.EVT_MENU, do_copy_selected, id=ID_COPY)
         frame.Bind(wx.EVT_MENU, do_copy_all, id=ID_COPY_ALL)
         frame.Bind(wx.EVT_MENU, do_remove_selected, id=ID_REMOVE)
         frame.Bind(wx.EVT_MENU, do_clear_history, id=ID_CLEAR)
         close_btn.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
 
-        # Accelerator Table for shortcuts
         accel_tbl = wx.AcceleratorTable([
           (wx.ACCEL_CTRL, ord('C'), ID_COPY),
           (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord('C'), ID_COPY_ALL),
@@ -501,7 +731,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           (wx.ACCEL_SHIFT, wx.WXK_DELETE, ID_CLEAR)
         ])
         frame.SetAcceleratorTable(accel_tbl)
-        
+
         panel.SetSizer(sizer)
         frame.Show()
         frame.Raise()
@@ -562,29 +792,29 @@ class MwWordLexiconSettingsPanel(SettingsPanel):
   def makeSettings(self, sizer):
     if SECTION not in config.conf:
       config.conf.createSection(SECTION)
-    
+
     current_size = int(config.conf[SECTION].get("history_size", "3"))
     cycle_history = str(config.conf[SECTION].get("cycle_history", False)).lower() == 'true'
-    
+
     settings_sizer = wx.StaticBoxSizer(wx.VERTICAL, self, label="Settings")
 
     history_label = wx.StaticText(self, label="History size (number of items to keep):")
     settings_sizer.Add(history_label, 0, wx.ALL, 5)
-    
-    self.history_spin = wx.SpinCtrl(self, value=str(current_size), min=1, max=100)
+
+    self.history_spin = wx.SpinCtrl(self, value=str(current_size), minValue=1, maxValue=100)
     settings_sizer.Add(self.history_spin, 0, wx.EXPAND | wx.ALL, 5)
-    
+
     self.cycle_history_cb = wx.CheckBox(self, label="Cycle through history directly (copies each item)")
     self.cycle_history_cb.SetValue(cycle_history)
     settings_sizer.Add(self.cycle_history_cb, 0, wx.ALL, 5)
-    
+
     sizer.Add(settings_sizer, 0, wx.EXPAND | wx.ALL, 5)
 
   def onSave(self):
     new_size = self.history_spin.GetValue()
     config.conf[SECTION]["history_size"] = new_size
     config.conf[SECTION]["cycle_history"] = self.cycle_history_cb.GetValue()
-    
+
     for plugin in globalPluginHandler.runningPlugins:
       if hasattr(plugin, "script_get_definition_with_smart_copy"):
         plugin.history_size = new_size
