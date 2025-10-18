@@ -575,12 +575,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             subfolder = audio_id[0]
             audio_url = f"https://media.merriam-webster.com/audio/prons/en/us/mp3/{subfolder}/{audio_id}.mp3"
 
-          wx.CallAfter(create_and_show_dialog, text, audio_url)
+          wx.CallAfter(create_and_show_dialog, text, audio_url, word)
 
         except Exception as e:
           wx.CallAfter(ui.message, f"Error: {str(e)}")
 
-      def create_and_show_dialog(text, audio_url):
+      def create_and_show_dialog(text, audio_url, original_word):
         global OPEN_DIALOG
         if OPEN_DIALOG:
           ui.message("Please close the open dialog before opening another.")
@@ -593,6 +593,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         text_ctrl = wx.TextCtrl(panel, value=text, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
         sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
 
+        speed_slider = None
+        volume_slider = None
         if audio_url:
           play_button = wx.Button(panel, label="Play")
           sizer.Add(play_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
@@ -607,7 +609,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           volume_slider = wx.Slider(panel, value=100, minValue=0, maxValue=100, style=wx.SL_HORIZONTAL)
           sizer.Add(volume_slider, 0, wx.EXPAND | wx.ALL, 10)
 
-          play_button.Bind(wx.EVT_BUTTON, lambda evt: play_with_ffplay(audio_url, speed_slider.GetValue(), volume_slider.GetValue()))
+          def do_play_for_url(url):
+            try:
+              sp = speed_slider.GetValue() if speed_slider else 100
+            except Exception:
+              sp = 100
+            try:
+              vol = volume_slider.GetValue() if volume_slider else 100
+            except Exception:
+              vol = 100
+            play_with_ffplay(url, sp, vol)
+
+          play_button.Bind(wx.EVT_BUTTON, lambda evt: threading.Thread(target=do_play_for_url, args=(audio_url,), daemon=True).start())
 
         btn_row = wx.BoxSizer(wx.HORIZONTAL)
         ok_button = wx.Button(panel, label="OK")
@@ -619,11 +632,70 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         ok_button.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
         cancel_button.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
 
+        def _play_word_lookup(word_to_lookup):
+          try:
+            resp = requests.get(DICTIONARY_API_URL.format(word_to_lookup))
+            if resp.status_code != 200:
+              wx.CallAfter(ui.message, "Failed to retrieve audio data.")
+              return
+            data = resp.json()
+            audio_id = data[0].get('hwi', {}).get('prs', [{}])[0].get('sound', {}).get('audio')
+            if not audio_id:
+              wx.CallAfter(ui.message, "No pronunciation audio available for that word.")
+              return
+            subfolder = audio_id[0]
+            url = f"https://media.merriam-webster.com/audio/prons/en/us/mp3/{subfolder}/{audio_id}.mp3"
+            do_play_for_url(url)
+          except Exception:
+            wx.CallAfter(ui.message, "Failed to fetch pronunciation.")
+
         def on_char_hook(evt):
-          if evt.GetKeyCode() == wx.WXK_ESCAPE:
+          kc = evt.GetKeyCode()
+          if kc == wx.WXK_ESCAPE:
             frame.Close()
-          else:
-            evt.Skip()
+            return
+          if evt.ControlDown() and (kc == ord('P') or kc == ord('p')):
+            sel = ""
+            try:
+              sel = text_ctrl.GetStringSelection().strip()
+            except Exception:
+              sel = ""
+            if sel:
+              words = [w for w in re.split(r'\s+', sel) if w]
+              if len(words) > 1:
+                ui.message("Cannot play pronunciation: select a single word.")
+              else:
+                sel_word = words[0]
+                threading.Thread(target=_play_word_lookup, args=(sel_word,), daemon=True).start()
+            else:
+              if audio_url:
+                threading.Thread(target=do_play_for_url, args=(audio_url,), daemon=True).start()
+              else:
+                threading.Thread(target=_play_word_lookup, args=(original_word,), daemon=True).start()
+            return
+          if evt.ShiftDown() and kc in (wx.WXK_UP, wx.WXK_DOWN):
+            if speed_slider:
+              cur = speed_slider.GetValue()
+              step = 5
+              newv = cur + (step if kc == wx.WXK_UP else -step)
+              newv = max(speed_slider.GetMin(), min(speed_slider.GetMax(), newv))
+              speed_slider.SetValue(newv)
+              ui.message(f"Speed {newv}%")
+            else:
+              evt.Skip()
+            return
+          if evt.ControlDown() and kc in (wx.WXK_UP, wx.WXK_DOWN):
+            if volume_slider:
+              cur = volume_slider.GetValue()
+              step = 5
+              newv = cur + (step if kc == wx.WXK_UP else -step)
+              newv = max(volume_slider.GetMin(), min(volume_slider.GetMax(), newv))
+              volume_slider.SetValue(newv)
+              ui.message(f"Volume {newv}%")
+            else:
+              evt.Skip()
+            return
+          evt.Skip()
 
         frame.Bind(wx.EVT_CHAR_HOOK, on_char_hook)
         frame.Bind(wx.EVT_CLOSE, lambda evt: _clear_open_dialog(evt, frame))
