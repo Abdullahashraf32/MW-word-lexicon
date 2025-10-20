@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MW Word Lexicon Add-on User Guide</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a href="../ar/ara.html">العربية</a>
+    <div class="container">
+        <h1>MW Word Lexicon: Add-on User Guide</h1>
+
+        <nav id="toc">
+            <h2>Table of Contents</h2>
+            <ul>
+                <li><a href="#introduction">Introduction</a></li>
+                <li><a href="#features">Key Features</a></li>
+                <li><a href="#dialogs">Understanding the Interactive Dialogs</a></li>
+                <li><a href="#settings">Settings and Customization</a></li>
+                <li><a href="#shortcuts">Add-on Shortcuts</a></li>
+                <li><a href="#important-notes">Important Notes</a></li>
+                <li><a href="#tech">How It Works: The Technology Inside</a></li>
+                <li><a href="#contact">Contact and Support</a></li>
+            </ul>
+        </nav>
+
+        <section id="introduction">
+            <h2>Introduction</h2>
+            <p>
+                The MW Word Lexicon add-on is a powerful tool designed to integrate a comprehensive dictionary and thesaurus directly into NVDA. Its main goal is to allow you to look up word definitions, synonyms, and antonyms instantly from any application without interrupting your work and having to open a dedicated page in your web browser to access different dictionaries.
+            </p>
+            <p>
+                This add-on uses the <strong>Merriam-Webster Dictionary API</strong> because it offers a generous free plan of <strong>1,000 requests per day</strong>. This ensures the add-on can remain free and reliable for all users. As a non-profit project, using a service that does not require payment was a key consideration during the add-on's design phases.
+            </p>
+        </section>
+
+        <section id="features">
+            <h2>Key Features</h2>
+            <ul>
+                <li><strong>Instant Lookups:</strong> Get definitions, synonyms, and antonyms for any selected word.</li>
+                <li><strong>Word of the Day:</strong> Discover a new word daily to expand your vocabulary.</li>
+                <li><strong>Flexible Output Modes:</strong> Choose how you receive results: auto-copy to the clipboard while speaking the definition, speak-only (requiring a double press to copy), or a detailed interactive dialog.</li>
+                <li><strong>Interactive Dialogs:</strong> Fully accessible dialogs for definitions, search, and history, complete with keyboard navigation and unique features.</li>
+                <li><strong>Comprehensive History:</strong> The add-on keeps a record of your recent lookups for easy review and management.</li>
+            </ul>
+        </section>
+
+        <section id="dialogs">
+            <h2>Understanding the Interactive Dialogs</h2>
+            <p>The add-on includes three main dialogs, each designed for a specific purpose to enhance your workflow.</p>
+
+            <h3>The Definition Dialog</h3>
+            <p>
+                This dialog appears when you are in "Copy and Show Dialog" mode and provides a rich environment for exploring word definitions. It's more than just a text viewer; it's a learning tool.
+            </p>
+            <ul>
+                <li>
+                    <strong>Pronunciation Playback:</strong> You can listen to the pronunciation of the word you looked up by pressing <code>Ctrl+P</code>. More importantly, you can select any <strong>single word</strong> within the results area and press <code>Ctrl+P</code> to listen to its pronunciation.
+                </li>
+                <li>
+                    <strong>Why a single word only?</strong> This feature is intentionally designed to help you learn the correct pronunciation of new words you encounter, especially the synonyms and antonyms that appear in search results. If you try to select more than one word, the action will fail, and you will receive an error message, as the goal is precise, single-word pronunciation.
+                </li>
+                <li>
+                    <strong>Persistent Audio Controls:</strong> The dialog includes sliders for adjusting playback <strong>Speed</strong> and <strong>Volume</strong>. The add-on remembers your settings. When you adjust the sliders to your preferred levels, these values are saved. The next time you open NVDA, the sliders will be at the same levels you left them, providing a consistent experience.
+                </li>
+            </ul>
+
+            <h3>The History Dialog</h3>
+            <p>
+                This dialog acts as your personal log of looked-up words. It allows you to review, reuse, and manage your search history efficiently.
+            </p>
+            <ul>
+                <li>
+                    <strong>Central Control via Context Menu:</strong> Your history is displayed in a simple list. The primary way to interact with it is to focus on the  history item you need within the list and press the <strong>Applications key</strong> to open a context menu. This menu gives you full control, with options to "Copy the currently focused item," "Remove the currently focused item," "Copy all history items," and "Clear all history items."
+                </li>
+                <li>
+                    <strong>Keyboard Shortcuts as a Seamless and Quick Access Method:</strong> For users who prefer the keyboard, shortcuts like <code>Ctrl+C</code> to copy the history focused item and <code>Delete</code> to remove the current history focused item are provided. These shortcuts are time-saving alternatives that perform the same actions found in the context menu.
+                </li>
+            </ul>
+
+            <h3>The Manual Search Dialog</h3>
+            <p>
+                You can open it by pressing <code>NVDA+Alt+A</code>, this is ideal for words you want to type and search for manually.
+            </p>
+            <ul>
+                <li>
+                    <strong>Flexible Search Types:</strong> It contains a combo box that allows you to specify what you are looking for: a <strong>definition</strong>, <strong>synonyms</strong>, or <strong>antonyms</strong>.
+                </li>
+                <li>
+                    <strong>Smart Auto-Search:</strong> This dialog has a convenient, time-saving feature. If you select text in the current open window before pressing <code>NVDA+Alt+A</code>, the dialog will automatically perform a search for that text the moment it opens. It then intelligently moves the focus directly to the results area, allowing you to start reading the information immediately without any extra steps.
+                </li>
+            </ul>
+        </section>
+
+        <section id="settings">
+             <h2>Settings and Customization</h2>
+            <p>
+                To customize the add-on, go to the NVDA menu, then <strong>Preferences -> Settings -> MW Word Lexicon</strong> category.
+            </p>
+            <ul>
+                <li><strong>History size:</strong> Sets the maximum number of lookups you want to store in the history.</li>
+                <li><strong>Cycle through history directly:</strong> Changes the behavior of the history shortcut (<code>Control+Shift+H</code>). When checked, each press cycles to the next history item and copies it. When unchecked, it opens the history management dialog.</li>
+                <li><strong>History retention period:</strong> Automatically deletes history items periodically at the specified time. For example, you can set it to keep items for only 7 days. If you wish to keep your history indefinitely, simply set its value to 0.</li>
+            </ul>
+        </section>
+
+        <section id="shortcuts">
+            <h2>Add-on Shortcuts</h2>
+            
+            <h3>General Shortcuts</h3>
+            <table>
+                <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
+                <tbody>
+                    <tr><td><code>Control+Shift+D</code></td><td>Get the definition for the selected word in the window.</td></tr>
+                    <tr><td><code>Control+Shift+T</code></td><td>Get synonyms for the selected word in the window.</td></tr>
+                    <tr><td><code>Control+Shift+U</code></td><td>Get antonyms for the selected word in the window.</td></tr>
+                    <tr><td><code>Control+Shift+W</code></td><td>Get the Word of the Day.</td></tr>
+                    <tr><td><code>Control+Shift+H</code></td><td>Show or cycle through history, depending on your preferred settings.</td></tr>
+                    <tr><td><code>Control+Shift+A</code></td><td>Switch between the three output modes.</td></tr>
+                    <tr><td><code>NVDA+Alt+A</code></td><td>Open the manual search dialog.</td></tr>
+                </tbody>
+            </table>
+
+            <h3>Definition Dialog Shortcuts</h3>
+            <table>
+                <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
+                <tbody>
+                    <tr><td><code>Ctrl+P</code></td><td>Play pronunciation of the original word or the single selected word within the dialog.</td></tr>
+                    <tr><td><code>Shift+Up/Down Arrow</code></td><td>Increase or decrease audio playback speed.</td></tr>
+                    <tr><td><code>Ctrl+Up/Down Arrow</code></td><td>Increase or decrease audio playback volume.</td></tr>
+                    <tr><td><code>Escape</code></td><td>Close the dialog.</td></tr>
+                </tbody>
+            </table>
+
+            <h3>History Dialog Shortcuts</h3>
+            <table>
+                <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
+                <tbody>
+                    <tr><td><code>Ctrl+C</code></td><td>Copy the currently focused history item.</td></tr>
+                    <tr><td><code>Ctrl+Shift+C</code></td><td>Copy all history items.</td></tr>
+                    <tr><td><code>Delete</code></td><td>Remove the currently focused history item.</td></tr>
+                    <tr><td><code>Shift+Delete</code></td><td>Clear the entire history.</td></tr>
+                    <tr><td><code>Escape</code></td><td>Close the dialog.</td></tr>
+                </tbody>
+            </table>
+        </section>
+        
+        <section id="important-notes">
+            <h2>Important Notes</h2>
+            <ul>
+                <li><strong>One Dialog at a Time:</strong> You must close any open add-on dialog before opening another to ensure smooth operation. If you try to open more than one dialog at the same time, the add-on will show an error message alerting you that there is an active dialog, and you cannot open any other dialog until the active one is closed first.</li>
+                <li><strong>Double-Press to Copy:</strong> In "Speak-Only" and "Dialog" modes, pressing a lookup shortcut twice quickly copies the last result.</li>
+                <li><strong>Internet Connection:</strong> An active internet connection is required for all lookups.</li>
+            </ul>
+        </section>
+
+        <section id="tech">
+            <h2>How It Works: The Technology Inside</h2>
+            <p>The add-on uses specific technologies to provide a seamless experience. This is what each component does for you:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Technology</th>
+                        <th>Its Benefit to You</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>requests</strong></td>
+                        <td>Handles communication with the dictionary API to fetch data for you.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>ctypes & comtypes</strong></td>
+                        <td>Allows the add-on to automatically read the text you have selected in other applications.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>wxPython</strong></td>
+                        <td>Builds the accessible user interface components like dialogs and buttons.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>subprocess</strong></td>
+                        <td>Runs the audio player in a separate process to ensure NVDA remains stable.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>threading</strong></td>
+                        <td>Performs slow tasks in the background so NVDA never freezes while waiting for a result.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="contact">
+            <h2>Contact and Support</h2>
+            <ul>
+                <li>If you encounter any issues, have constructive suggestions to enhance and develop the add-on, or want to contribute to its programming, please open an issue or pull request on the
+                    <a href="https://github.com/Abdullahashraf32/MW-word-lexicon/tree/MW-word-lexicon/">
+                        GitHub repository
+                    </a>.
+                </li>
+                <li>You can email me from <a href="mailto: abdullahashraf4846@gmail.com">Here</a></li>
+                <li>You can contact me via WhatsApp from <a href="https://wa.me/+201148467527">Here</a></li>
+                <li>In case you need to contact me via Telegram, you can do it from <a href="https://t.me/abdullahashraf4846">Here</a></li>
+                <li>You can visit my Youtube channel from <a href="https://www.youtube.com/@AbdullahAshraf-zc5dx">Here</a></li>
+            </ul>
+        </section>
+    </div>
+</body>
+</html>

@@ -1,0 +1,102 @@
+:root {
+  --max-width: 980px;
+  --accent: #2c6ef6;
+  --muted: #666;
+  --striped-bg: #fafafa;
+  --table-border: #ddd;
+  --heading-bg: #f6f8fb;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  color: #222;
+  line-height: 1.45;
+  background: #fff;
+}
+
+header {
+  background: var(--heading-bg);
+  border-bottom: 1px solid #e6e9ef;
+  padding: 18px;
+}
+
+header h1 {
+  margin: 0 0 8px 0;
+  font-size: 1.6rem;
+}
+
+nav ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  gap: 12px;
+}
+
+nav a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+main {
+  max-width: var(--max-width);
+  margin: 18px auto;
+  padding: 0 18px;
+}
+
+h2 {
+  margin-top: 28px;
+  font-size: 1.25rem;
+  border-left: 4px solid var(--accent);
+  padding-left: 10px;
+  background: #fff;
+}
+
+h3 {
+  margin-top: 18px;
+  font-size: 1rem;
+}
+
+p {
+  margin: 10px 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0 22px 0;
+  font-size: 0.95rem;
+}
+
+table th,
+table td {
+  border: 1px solid var(--table-border);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+table thead th {
+  background: #f2f6ff;
+  font-weight: 600;
+}
+
+table.striped tbody tr:nth-child(odd) {
+  background: var(--striped-bg);
+}
+
+nav a:hover,
+nav a:focus {
+  text-decoration: underline;
+}
+
+footer {
+  max-width: var(--max-width);
+  margin: 24px auto;
+  padding: 10px 18px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  border-top: 1px solid #eee;
+}
