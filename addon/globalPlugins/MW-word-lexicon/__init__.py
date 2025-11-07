@@ -88,6 +88,47 @@ def _call_selection_helper_foreground(out_container):
 
 DICTIONARY_API_URL = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/?word={}"
 
+def build_mw_audio_url(audio_id):
+  if not audio_id:
+    return None
+  if audio_id.startswith("bix"):
+    sub = "bix"
+  elif audio_id.startswith("gg"):
+    sub = "gg"
+  elif not audio_id[0].isalpha():
+    sub = "number"
+  else:
+    sub = audio_id[0]
+  return f"https://media.merriam-webster.com/audio/prons/en/us/mp3/{sub}/{audio_id}.mp3"
+
+def find_first_audio_id(api_json):
+  try:
+    for entry in api_json:
+      if not isinstance(entry, dict):
+        continue
+      hwi = entry.get("hwi") or {}
+      prs = hwi.get("prs") or []
+      for p in prs:
+        snd = (p or {}).get("sound") or {}
+        aid = snd.get("audio")
+        if aid:
+          return aid
+  except Exception:
+    pass
+  return None
+
+def http_get_json(url, retries=2, timeout=6):
+  last_err = None
+  for _ in range(max(1, retries + 1)):
+    try:
+      r = requests.get(url, timeout=timeout)
+      if r.status_code == 200:
+        return r.json()
+    except Exception as e:
+      last_err = e
+  raise RuntimeError(f"Request failed or non-200 response: {last_err}")
+
+
 def strip_html_tags(text):
   """
   Remove HTML tags using a regex.
@@ -95,11 +136,11 @@ def strip_html_tags(text):
   return re.sub(r'<[^>]+>', '', text)
 
 def play_with_ffplay(audio_url, speed=100, volume=100):
-  """
-  Play an audio stream from a URL using bundled ffplay.exe.
-  """
   try:
     ffplay_path = os.path.join(os.path.dirname(__file__), "bin", "ffplay.exe")
+    if not os.path.exists(ffplay_path):
+      ui.message("ffplay.exe is missing under /bin.")
+      return
     rate = max(50, min(speed, 200)) / 100
     vol = max(0, min(volume, 100))
     subprocess.Popen([
@@ -118,7 +159,7 @@ def get_word_of_the_day():
   """
   url = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/wotd"
   try:
-    response = requests.get(url)
+    response = requests.get(url, timeout=6)
   except Exception:
     return None
   if response.status_code == 200:
@@ -172,7 +213,7 @@ def get_word_definition_from_proxy(word):
   Query dictionary proxy and return formatted definitions+examples or an error string.
   """
   try:
-    response = requests.get(DICTIONARY_API_URL.format(word))
+    response = requests.get(DICTIONARY_API_URL.format(word), timeout=6)
   except Exception:
     return "Failed to connect to the dictionary service."
   if response.status_code == 200:
@@ -600,21 +641,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     return get_word_definition_from_proxy(word)
 
   def _fetch_audio_and_show_dialog(self, text, word):
-    """Helper for handle_output (mode 2) to fetch audio URL."""
     try:
-      response = requests.get(DICTIONARY_API_URL.format(word))
-      if response.status_code != 200:
-        wx.CallAfter(ui.message, "Failed to retrieve audio data.")
-        return
-
-      data = response.json()
-      audio_id = data[0].get('hwi', {}).get('prs', [{}])[0].get('sound', {}).get('audio')
+      data = http_get_json(DICTIONARY_API_URL.format(word))
+      audio_id = find_first_audio_id(data)
       if not audio_id:
         wx.CallAfter(ui.message, "No pronunciation audio available.")
         audio_url = None
       else:
-        subfolder = audio_id[0]
-        audio_url = f"https://media.merriam-webster.com/audio/prons/en/us/mp3/{subfolder}/{audio_id}.mp3"
+        audio_url = build_mw_audio_url(audio_id)
       wx.CallAfter(self._create_and_show_dialog, text, audio_url, word)
     except Exception as e:
       wx.CallAfter(ui.message, f"Error: {str(e)}")
@@ -635,24 +669,23 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     speed_slider = None
     volume_slider = None
-    if audio_url:
-      play_button = wx.Button(panel, label="Play")
-      sizer.Add(play_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
+    play_button = wx.Button(panel, label="Play")
+    sizer.Add(play_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
 
-      speed_label = wx.StaticText(panel, label="Speed:")
-      sizer.Add(speed_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
-      speed_slider = wx.Slider(panel, value=100, minValue=50, maxValue=200, style=wx.SL_HORIZONTAL)
-      sizer.Add(speed_slider, 0, wx.EXPAND | wx.ALL, 10)
+    speed_label = wx.StaticText(panel, label="Speed:")
+    sizer.Add(speed_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
+    speed_slider = wx.Slider(panel, value=100, minValue=50, maxValue=200, style=wx.SL_HORIZONTAL)
+    sizer.Add(speed_slider, 0, wx.EXPAND | wx.ALL, 10)
 
-      volume_label = wx.StaticText(panel, label="Volume:")
-      sizer.Add(volume_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
-      volume_slider = wx.Slider(panel, value=100, minValue=0, maxValue=100, style=wx.SL_HORIZONTAL)
-      sizer.Add(volume_slider, 0, wx.EXPAND | wx.ALL, 10)
+    volume_label = wx.StaticText(panel, label="Volume:")
+    sizer.Add(volume_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
+    volume_slider = wx.Slider(panel, value=100, minValue=0, maxValue=100, style=wx.SL_HORIZONTAL)
+    sizer.Add(volume_slider, 0, wx.EXPAND | wx.ALL, 10)
 
-      def do_play_for_url(url):
-        sp = speed_slider.GetValue() if speed_slider else 100
-        vol = volume_slider.GetValue() if volume_slider else 100
-        play_with_ffplay(url, sp, vol)
+    def do_play_for_url(url):
+      sp = speed_slider.GetValue() if speed_slider else 100
+      vol = volume_slider.GetValue() if volume_slider else 100
+      play_with_ffplay(url, sp, vol)
 
       play_button.Bind(wx.EVT_BUTTON, lambda evt: threading.Thread(target=do_play_for_url, args=(audio_url,), daemon=True).start())
 
@@ -668,18 +701,23 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     def _play_word_lookup(word_to_lookup):
       try:
-        resp = requests.get(DICTIONARY_API_URL.format(word_to_lookup))
-        if resp.status_code != 200:
+        data = http_get_json(DICTIONARY_API_URL.format(word_to_lookup))
+        aid = find_first_audio_id(data)
+        if not aid:
+          wx.CallAfter(ui.message, "No pronunciation available for the selected word.")
           return
-        data = resp.json()
-        audio_id = data[0].get('hwi', {}).get('prs', [{}])[0].get('sound', {}).get('audio')
-        if not audio_id:
-          return
-        subfolder = audio_id[0]
-        url = f"https://media.merriam-webster.com/audio/prons/en/us/mp3/{subfolder}/{audio_id}.mp3"
+        url = build_mw_audio_url(aid)
         do_play_for_url(url)
       except Exception:
         wx.CallAfter(ui.message, "Failed to fetch pronunciation.")
+
+    play_button.Bind(
+      wx.EVT_BUTTON,
+      (lambda evt: threading.Thread(
+        target=(lambda: do_play_for_url(audio_url)) if audio_url else (lambda: _play_word_lookup(original_word)),
+        daemon=True
+      ).start())
+    )
 
     def on_char_hook(evt):
       kc = evt.GetKeyCode()
@@ -700,6 +738,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           else:
             threading.Thread(target=_play_word_lookup, args=(original_word,), daemon=True).start()
         return
+
       if evt.ShiftDown() and kc in (wx.WXK_UP, wx.WXK_DOWN):
         if speed_slider:
           cur = speed_slider.GetValue(); step = 5; newv = cur + (step if kc == wx.WXK_UP else -step)
@@ -734,7 +773,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     elif self.copy_mode == 1:
       ui.message(text)
     elif self.copy_mode == 2:
-      audio_thread = threading.Thread(target=self._fetch_audio_and_show_dialog, args=(text, self.last_selected_word))
+      def _infer_word_from_text(t):
+        try:
+          head = (t.split(":\n", 1)[0] or "").strip()
+          return head if head else None
+        except Exception:
+          return None
+
+      safe_word = getattr(self, "last_selected_word", None) or _infer_word_from_text(text) or ""
+      audio_thread = threading.Thread(target=self._fetch_audio_and_show_dialog, args=(text, safe_word))
+
       audio_thread.daemon = True
       audio_thread.start()
 
