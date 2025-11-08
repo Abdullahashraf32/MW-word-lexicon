@@ -47,6 +47,33 @@ except Exception:
 # Global variable to track any currently open dialog created by this addon.
 OPEN_DIALOG = None
 
+def normalize_selected_word(raw):
+  """
+  Normalize a raw selection (e.g., bulleted/numbered lines) to a single English word.
+  Steps:
+    - Pick the first non-empty line.
+    - Strip common bullet/number prefixes (•, -, *, 1), a), etc.
+    - Extract the first English-like token (letters with optional - or ').
+  Returns:
+    A single normalized word (str) or None.
+  """
+  if not raw:
+    return None
+  # 1) First non-empty line
+  line = None
+  for ln in str(raw).splitlines():
+    ln = (ln or "").strip()
+    if ln:
+      line = ln
+      break
+  if not line:
+    return None
+  # 2) Remove bullet/number prefixes
+  line = re.sub(r'^\s*(?:[\u2022•\-\*\·]|(?:\(?\d+[)\.\:\-]?\)?)|(?:[A-Za-z]\)))\s*', '', line)
+  # 3) Extract the first English token
+  m = re.search(r"[A-Za-z][A-Za-z\-']*", line)
+  return m.group(0) if m else None
+
 def _clear_open_dialog(evt, frame):
   """
   Reset the OPEN_DIALOG global flag when a dialog is closed.
@@ -241,50 +268,46 @@ def get_word_definition_from_proxy(word):
 
 def get_selected_text():
   """
-  Try several methods to get the currently selected text:
-  1) From NVDA's review cursor properties.
-  2) From candidate hwnds via selection_helper (threaded).
-  3) From foreground window via selection_helper.
+  Prefer exact UI selection via selection_helper (UIA/WM/Ctrl+C), then fall back.
+  Order:
+    1) Foreground control via selection_helper (most accurate for real selections).
+    2) Candidate hwnds from reviewPos via selection_helper.
+    3) Last resort: a small, single-line text from reviewPos properties.
   """
+  # 1) Foreground window (fast + accurate)
+  try:
+    out = []
+    th = threading.Thread(target=_call_selection_helper_foreground, args=(out,))
+    th.daemon = True
+    th.start()
+    th.join(0.9)
+    if out and out[0]:
+      return out[0]
+  except Exception:
+    pass
+
+  # 2) Use reviewPos only to discover hwnd candidates; still fetch via selection_helper
   try:
     reviewPos = api.getReviewPosition()
   except Exception:
     reviewPos = None
 
+  hwnd_candidates = []
   if reviewPos:
     try:
-      for attr in ("value", "text", "displayText"):
+      for attr_name in ("windowHandle", "hwnd"):
         try:
-          v = getattr(reviewPos, attr, None)
-        except Exception:
-          v = None
-        if isinstance(v, str) and v.strip():
-          return v.strip()
-      try:
-        if hasattr(reviewPos, "getText"):
-          t = reviewPos.getText(0)
-          if isinstance(t, str) and t.strip():
-            return t.strip()
-      except Exception:
-        pass
-    except Exception:
-      pass
-
-    hwnd_candidates = []
-    for attr_name in ("windowHandle", "hwnd"):
-      try:
-        wh = getattr(reviewPos, attr_name, None)
-        if wh is not None:
-          try:
-            hwnd_candidates.append(int(wh))
-          except Exception:
+          wh = getattr(reviewPos, attr_name, None)
+          if wh is not None:
             try:
-              hwnd_candidates.append(int(getattr(wh, "value", wh)))
+              hwnd_candidates.append(int(wh))
             except Exception:
-              pass
-      except Exception:
-        pass
-    try:
+              try:
+                hwnd_candidates.append(int(getattr(wh, "value", wh)))
+              except Exception:
+                pass
+        except Exception:
+          pass
       appmod = getattr(reviewPos, "appModule", None)
       if appmod:
         wh = getattr(appmod, "helperLocalBindingHandle", None)
@@ -299,40 +322,72 @@ def get_selected_text():
     except Exception:
       pass
 
-    for h in hwnd_candidates:
+  for h in hwnd_candidates:
+    try:
+      out = []
+      th = threading.Thread(target=_call_selection_helper_for_hwnd, args=(h, out))
+      th.daemon = True
+      th.start()
+      th.join(0.9)
+      if out and out[0]:
+        return out[0]
+    except Exception:
+      pass
+
+  # 3) Last resort: restrict to small, single-line values from reviewPos
+  if reviewPos:
+    try:
+      for attr in ("value", "text", "displayText"):
+        try:
+          v = getattr(reviewPos, attr, None)
+        except Exception:
+          v = None
+        if isinstance(v, str):
+          v = v.strip()
+          if v and ("\n" not in v) and len(v) <= 64:
+            return v
       try:
-        out = []
-        th = threading.Thread(target=_call_selection_helper_for_hwnd, args=(h, out))
-        th.daemon = True
-        th.start()
-        th.join(0.9)
-        if out and out[0]:
-          return out[0]
+        if hasattr(reviewPos, "getText"):
+          t = reviewPos.getText(0)
+          if isinstance(t, str):
+            t = t.strip()
+            if t and ("\n" not in t) and len(t) <= 64:
+              return t
       except Exception:
         pass
-
-  try:
-    out = []
-    th = threading.Thread(target=_call_selection_helper_foreground, args=(out,))
-    th.daemon = True
-    th.start()
-    th.join(0.9)
-    if out and out[0]:
-      return out[0]
-  except Exception:
-    pass
+    except Exception:
+      pass
 
   return None
 
 def get_valid_selected_word():
   """
-  Wrapper around get_selected_text() that notifies the user if nothing is selected.
+  Get the selected word robustly.
+  Order:
+    1) Strict word from selection_helper (foreground Edit/RichEdit only).
+    2) General selected text via selection_helper (UIA/WM/Ctrl+C), then normalize.
   """
+  # 1) Strict path: works around UIA partial prefixes (e.g., 'wat' for 'water').
+  try:
+    if selection_helper and hasattr(selection_helper, "get_strict_word_from_foreground"):
+      strict = selection_helper.get_strict_word_from_foreground()
+      if strict and re.match(r"^[A-Za-z][A-Za-z'\-]*$", strict):
+        return strict
+  except Exception:
+    pass
+
+  # 2) Fallback: previous generic selection then normalization
   selected = get_selected_text()
   if not selected:
     ui.message("No text selected.")
     return None
-  return selected
+
+  word = normalize_selected_word(selected)
+  if not word:
+    ui.message("Please select a single English word.")
+    return None
+
+  return word
 
 def handle_double_press(last_time, current_time, cached_text, label="Text"):
   """

@@ -15,6 +15,244 @@ import sys
 import time
 import ctypes
 from ctypes import wintypes, create_unicode_buffer
+import re
+
+def _find_edit_like_child(root_hwnd):
+  """
+  Find a descendant of 'root_hwnd' whose class name looks like an Edit/RichEdit control.
+  Returns HWND (int) or None.
+  """
+  try:
+    FindWindowExW = user32.FindWindowExW
+  except Exception:
+    return None
+
+  EDIT_KEYS = ("edit", "richedit", "richtextbox")
+  child = wintypes.HWND(0)
+  last = 0
+  while True:
+    child = FindWindowExW(root_hwnd, last, None, None)
+    if not child:
+      break
+    # class name
+    buf = create_unicode_buffer(256)
+    try:
+      user32.GetClassNameW(child, buf, ctypes.sizeof(buf))
+      cname = (buf.value or "").lower()
+    except Exception:
+      cname = ""
+    if any(k in cname for k in EDIT_KEYS):
+      return child
+    last = child
+
+  # Try deeper: enumerate grandchildren of the first-level children
+  last = 0
+  while True:
+    first_level = FindWindowExW(root_hwnd, last, None, None)
+    if not first_level:
+      break
+    sublast = 0
+    while True:
+      sub = FindWindowExW(first_level, sublast, None, None)
+      if not sub:
+        break
+      buf = create_unicode_buffer(256)
+      try:
+        user32.GetClassNameW(sub, buf, ctypes.sizeof(buf))
+        cname = (buf.value or "").lower()
+      except Exception:
+        cname = ""
+      if any(k in cname for k in EDIT_KEYS):
+        return sub
+      sublast = sub
+    last = first_level
+  return None
+
+def _pick_numbered_line_word(full_text, start, end):
+  """
+  Robustly extract the word from numbered/bulleted lines,
+      Returns the word if the current line matches, else None.
+  """
+  if not isinstance(full_text, str):
+    return None
+  n = len(full_text)
+  L = max(0, int(start)); R = max(L, int(end))
+
+  # Compute current line bounds around (start, end)
+  line_start = full_text.rfind("\n", 0, L) + 1
+  if line_start < 0:
+    line_start = 0
+  line_end = full_text.find("\n", R)
+  if line_end == -1:
+    line_end = n
+  line = full_text[line_start:line_end]
+
+  # Pattern: optional spaces, digits, optional spaces, one of - . ) : ],
+  # optional spaces, WORD, then optional trailing punctuation/spaces
+  m = re.match(r"^\s*\d+\s*[-\.\)\]:]\s*([A-Za-z][A-Za-z'\-]*)[^\w]*\s*$", line)
+  if not m:
+    return None
+  return m.group(1)
+
+def _expand_to_longest_word_on_line(full_text, start, end):
+  """
+  Last-resort: given full text and a (start, end) range, compute the current line,
+  then return the longest [A-Za-z'-]+ token on that line (prefer one intersecting the range).
+  """
+  if not isinstance(full_text, str):
+    return None
+  n = len(full_text)
+  L = max(0, int(start)); R = max(L, int(end))
+  # line bounds
+  line_start = full_text.rfind("\n", 0, L) + 1
+  if line_start < 0: line_start = 0
+  line_end = full_text.find("\n", R)
+  if line_end == -1: line_end = n
+  line = full_text[line_start:line_end]
+
+  best = None
+  for m in re.finditer(r"[A-Za-z][A-Za-z'\-]*", line):
+    s0, e0 = m.span()
+    abs_s, abs_e = line_start + s0, line_start + e0
+    # Prefer a token intersecting the (start,end) range around the caret/selection.
+    if not (abs_e <= L or abs_s >= R):
+      return m.group(0)
+    if not best or len(m.group(0)) > len(best):
+      best = m.group(0)
+  return best
+
+def _word_at_index(full_text, index):
+  """
+  Return the full English-like word (letters, apostrophe, hyphen) surrounding 'index'.
+  If no word surrounds the index, return None.
+  """
+  if not isinstance(full_text, str):
+    return None
+  n = len(full_text)
+  if n == 0:
+    return None
+  i = max(0, min(int(index), n - 1))
+
+  # If current char is not wordy, try the previous char once (for right-edge selections)
+  def _isw(ch): return bool(re.match(r"[A-Za-z'\-]", ch))
+  if not _isw(full_text[i]):
+    if i > 0 and _isw(full_text[i - 1]):
+      i -= 1
+    else:
+      return None
+
+  L = i
+  while L > 0 and _isw(full_text[L - 1]):
+    L -= 1
+  R = i + 1
+  while R < n and _isw(full_text[R]):
+    R += 1
+  word = full_text[L:R].strip()
+  return re.sub(r"[^\w'\-]+$", "", word) if word else None
+
+def get_strict_word_from_foreground():
+  """
+  Return the *actual* word under selection/caret from a text edit control,
+  even if the UI focus is not directly on that control (e.g., Notepad parent window).
+  Strategy:
+    - Get foreground and GUI thread info.
+    - Prefer hwndFocus if it's Edit/RichEdit; otherwise, find an Edit/RichEdit descendant.
+    - Use EM_GETSEL + WM_GETTEXT on that handle.
+    - Remove CR characters, then:
+        * numbered/bulleted regex
+        * word-at-index (center for real selection, caret for e==s)
+        * expand to word bounds
+        * longest token on line as a last resort
+  """
+  try:
+    foreground = user32.GetForegroundWindow()
+    if not foreground:
+      return None
+
+    pid = wintypes.DWORD()
+    threadId = user32.GetWindowThreadProcessId(foreground, ctypes.byref(pid))
+
+    gui_info = GUITHREADINFO()
+    gui_info.cbSize = ctypes.sizeof(GUITHREADINFO)
+    ok = user32.GetGUIThreadInfo(threadId, ctypes.byref(gui_info))
+
+    focus = gui_info.hwndFocus or gui_info.hwndActive or foreground if ok else foreground
+    target = focus
+
+    # Ensure target is an Edit-like control; otherwise find a descendant.
+    bufname = create_unicode_buffer(256)
+    user32.GetClassNameW(target, bufname, ctypes.sizeof(bufname))
+    cname = (bufname.value or "").lower()
+    if not ("edit" in cname or "richedit" in cname or "richtextbox" in cname):
+      found = _find_edit_like_child(foreground)
+      if found:
+        target = found
+      else:
+        # As a fallback, try a child under the focused window (if different)
+        if focus and focus != foreground:
+          found2 = _find_edit_like_child(focus)
+          if found2:
+            target = found2
+          else:
+            return None
+
+    # Get selection range and entire text from the *text control* target
+    start = wintypes.DWORD()
+    end = wintypes.DWORD()
+    try:
+      user32.SendMessageW(target, EM_GETSEL, ctypes.byref(start), ctypes.byref(end))
+    except Exception:
+      try:
+        user32.SendMessageW(target, EM_GETSEL, 0, 0)
+      except Exception:
+        return None
+    s = int(getattr(start, "value", 0))
+    e = int(getattr(end, "value", 0))
+
+    length = user32.SendMessageW(target, WM_GETTEXTLENGTH, 0, 0)
+    if length <= 0:
+      return None
+
+    buf = create_unicode_buffer(length + 1)
+    user32.SendMessageW(target, WM_GETTEXT, length + 1, ctypes.byref(buf))
+    full = buf.value or ""
+
+    # Normalize CRLF → strip CR to make line math robust near EOL
+    if "\r" in full:
+      full = full.replace("\r", "")
+
+    # Numbered/bulleted override
+    numbered_word = _pick_numbered_line_word(full, s, e)
+    if numbered_word:
+      return numbered_word
+
+    # Choose index: center of selection or caret
+    idx = s if e == s else (s + e) // 2
+
+    # Primary: word-at-index
+    picked = _word_at_index(full, idx)
+    if picked:
+      return picked
+
+    # Expand to word bounds from range/index
+    L = s if e > s else idx
+    R = e if e > s else idx
+    while L > 0 and re.match(r"[A-Za-z'\-]", full[L - 1]): L -= 1
+    while R < len(full) and re.match(r"[A-Za-z'\-]", full[R]): R += 1
+    cand = (full[L:R] or "").strip()
+    if cand:
+      cand = re.sub(r"[^\w'\-]+$", "", cand)
+    if cand:
+      return cand
+
+    # Last resort: dominant token on the current line
+    fallback = _expand_to_longest_word_on_line(full, s, e)
+    if fallback:
+      return fallback
+
+  except Exception:
+    return None
+  return None
 
 def to_int(arg):
   """
@@ -76,60 +314,98 @@ class GUITHREADINFO(ctypes.Structure):
 
 def try_get_selection_from_hwnd(focus):
   """
-  Tries to get the selected text from a window handle (hwnd) by using
-  Windows messages. This method works well for standard controls like
-  'Edit', 'RichEdit', etc.
-
-  Args:
-    focus (wintypes.HWND): The handle to the window/control.
-
-  Returns:
-    The selected text as a string if successful, otherwise None.
+  Get selected text from a window handle using EM_GETSEL/WM_GETTEXT.
+  Handles both real selections and caret-only cases by expanding to word bounds.
   """
   try:
-    # Get the class name of the window to check if it's a known text control.
+    # Identify class name
     bufname = create_unicode_buffer(256)
     user32.GetClassNameW(focus, bufname, ctypes.sizeof(bufname))
     cname = (bufname.value or "").lower()
 
-    # Check if the control is a type that supports EM_GETSEL.
     if "edit" in cname or "richedit" in cname or "richtextbox" in cname:
       start = wintypes.DWORD()
       end = wintypes.DWORD()
-      
-      # Send the EM_GETSEL message to get the start and end of the selection.
       try:
         user32.SendMessageW(focus, EM_GETSEL, ctypes.byref(start), ctypes.byref(end))
       except Exception:
-        # Fallback for some architectures/control versions.
         try:
           user32.SendMessageW(focus, EM_GETSEL, 0, 0)
         except Exception:
           return None
 
-      s = int(start.value) if hasattr(start, "value") else 0
-      e = int(end.value) if hasattr(end, "value") else 0
+      s = int(getattr(start, "value", 0))
+      e = int(getattr(end, "value", 0))
 
-      # If there is a selection (end > start).
+      length = user32.SendMessageW(focus, WM_GETTEXTLENGTH, 0, 0)
+      if length <= 0:
+        return None
+
+      buf = create_unicode_buffer(length + 1)
+      user32.SendMessageW(focus, WM_GETTEXT, length + 1, ctypes.byref(buf))
+      full = buf.value or ""
+      # Hard override for numbered-list lines like "3-water.":
+      # If the current line matches, ignore the raw selection range and return the word.
+      numbered_word = _pick_numbered_line_word(full, s, e)
+      if numbered_word:
+        return numbered_word
+      # Numbered-line hard match (covers 1-, 1 -, 1., 1), 1:, etc.)
+      numbered_word = _pick_numbered_line_word(full, s, e)
+      if numbered_word:
+        return numbered_word
+
+      # Case 1: real selection (e > s) → slice then normalize/expand.
       if e > s:
-        # Get the total length of the text in the control.
-        length = user32.SendMessageW(focus, WM_GETTEXTLENGTH, 0, 0)
-        if length <= 0:
-          return None
-        
-        # Get the full text from the control.
-        buf = create_unicode_buffer(length + 1)
-        user32.SendMessageW(focus, WM_GETTEXT, length + 1, ctypes.byref(buf))
-        full = buf.value or ""
-        
-        # Slice the full text to get the selected part.
         try:
           sel = full[s:e]
         except Exception:
-          sel = full # Fallback to full text on slicing error.
-        
-        if sel and sel.strip():
-          return sel.strip()
+          sel = full
+        sel = (sel or "").strip()
+
+        # Very short alpha? fix with word-at-index first
+        if sel and len(sel) <= 4 and re.match(r"^[A-Za-z]+$", sel):
+          center = (s + e) // 2
+          picked = _word_at_index(full, center)
+          if picked:
+            sel = picked
+          else:
+            # Expand left/right on raw text as fallback
+            L, R = s, e
+            while L > 0 and re.match(r"[A-Za-z'\-]", full[L - 1]): L -= 1
+            while R < len(full) and re.match(r"[A-Za-z'\-]", full[R]): R += 1
+            sel = (full[L:R] or sel).strip()
+
+        # Trim trailing punctuation
+        if sel:
+          sel = re.sub(r"[^\w'\-]+$", "", sel)
+
+        if sel:
+          # Still too short? choose the dominant token on this line
+          if len(sel) <= 4 and re.match(r"^[A-Za-z]+$", sel):
+            fallback = _expand_to_longest_word_on_line(full, s, e)
+            if fallback:
+              sel = fallback
+          return sel.strip() or None
+
+      # Case 2: caret only (e == s) → expand around caret to word bounds.
+      if e == s:
+        picked = _word_at_index(full, s)
+        if picked:
+          return picked
+
+        L = R = s
+        while L > 0 and re.match(r"[A-Za-z'\-]", full[L - 1]): L -= 1
+        while R < len(full) and re.match(r"[A-Za-z'\-]", full[R]): R += 1
+        cand = (full[L:R] or "").strip()
+        if cand:
+          cand = re.sub(r"[^\w'\-]+$", "", cand)
+        if cand:
+          return cand
+
+        fallback = _expand_to_longest_word_on_line(full, s, e)
+        if fallback:
+          return fallback
+
   except Exception:
     return None
   return None
@@ -297,31 +573,22 @@ def send_ctrl_c_to_window(hwnd, timeout=0.6):
 
 def try_ui_automation_text(hwnd):
   """
-  Tries to get the selected text from a window handle using the
-  Microsoft UI Automation (UIA) framework. This is a more modern
-  accessibility API that works with a wider range of applications.
-
-  Args:
-    hwnd (wintypes.HWND): The handle to the window/control.
-
-  Returns:
-    The selected text as a string if successful, otherwise None.
+  Try to read the exact selection via Microsoft UI Automation (UIA).
+  If the selection is a too-short alpha prefix (e.g., 'wat' from 'water'),
+  first normalize to the enclosing word, then (if needed) walk left/right
+  character-by-character until true word boundaries are reached.
+  Docs: IUIAutomationTextRange::ExpandToEnclosingUnit / MoveEndpointByUnit.
   """
   try:
     from comtypes.client import CreateObject
-    
-    # Create an instance of the CUIAutomation object.
+    import re as _re
+
     uia = CreateObject("UIAutomationClient.CUIAutomation")
-    
-    # Get the UIA element corresponding to the window handle.
     element = uia.ElementFromHandle(hwnd)
     if not element:
       return None
-      
-    # The ID for the TextPattern in UIA.
+
     TextPatternId = 10014
-    
-    # Get the TextPattern from the element.
     try:
       pattern = element.GetCurrentPattern(TextPatternId)
     except Exception:
@@ -329,72 +596,129 @@ def try_ui_automation_text(hwnd):
         pattern = element.GetPattern(TextPatternId)
       except Exception:
         pattern = None
-        
     if not pattern:
       return None
-      
-    # Try to get the selected text ranges.
+
+    EP_START, EP_END = 0, 1       # TextPatternRangeEndpoint
+    TU_CHAR, TU_WORD = 0, 2       # TextUnit Character/Word
+
+    def _strip_trailing_punct(s):
+      return _re.sub(r"[^\w'\-]+$", "", s or "").strip()
+
+    def _txt(r, n=-1):
+      try:
+        return (r.GetText(n) or "").strip()
+      except Exception:
+        return ""
+
+    # Selection first
     try:
       ranges = pattern.GetSelection()
-      if ranges and ranges.Length > 0:
-        rng = ranges.GetElement(0) if hasattr(ranges, "GetElement") else ranges[0]
-        # Get the text from the first selection range.
+      if not ranges:
+        return None
+      rng = ranges.GetElement(0) if hasattr(ranges, "GetElement") else ranges[0]
+      txt = _txt(rng, -1)
+
+      # If it's already a decent length, just clean punctuation.
+      if txt and len(txt) > 4:
+        return _strip_trailing_punct(txt)
+
+      # Normalize to Word if provider supports it.
+      if txt and _re.match(r"^[A-Za-z]+$", txt):
         try:
-          text = rng.GetText(-1) # -1 means get the entire text of the range.
+          w = rng.Clone()
+          w.ExpandToEnclosingUnit(TU_WORD)
+          t2 = _strip_trailing_punct(_txt(w, -1))
+          if t2 and len(t2) >= len(txt):
+            return t2
         except Exception:
-          try:
-            text = rng.GetText(sys.maxsize) # Fallback for some implementations.
-          except Exception:
-            text = None
-        if text and text.strip():
-          return text.strip()
-    except Exception:
-      # If getting selection fails, try getting the entire document text as a fallback.
+          pass
+
+      # Manual left walk to word boundary.
       try:
-        docRange = pattern.GetDocumentRange()
-        if docRange:
-          text = docRange.GetText(-1)
-          if text and text.strip():
-            return text.strip()
+        left = rng.Clone()
+        while True:
+          probe = left.Clone()
+          moved = probe.MoveEndpointByUnit(EP_START, TU_CHAR, -1)
+          if not moved:
+            break
+          check = probe.Clone()
+          check.MoveEndpointByRange(EP_END, probe, EP_START)
+          c = _txt(check, 1)
+          if not c or not _re.match(r"[A-Za-z'\-]", c):
+            break
+          left = probe
       except Exception:
-        pass
+        left = rng
+
+      # Manual right walk to word boundary.
+      try:
+        right = left.Clone()
+        while True:
+          probe = right.Clone()
+          moved = probe.MoveEndpointByUnit(EP_END, TU_CHAR, +1)
+          if not moved:
+            break
+          check = probe.Clone()
+          check.MoveEndpointByRange(EP_START, probe, EP_END)
+          c = _txt(check, 1)
+          if not c or not _re.match(r"[A-Za-z'\-]", c):
+            break
+          right = probe
+      except Exception:
+        right = left
+
+      expanded = _strip_trailing_punct(_txt(right, -1))
+      if expanded:
+        return expanded
+
+      if txt:
+        return _strip_trailing_punct(txt)
+    except Exception:
+      pass
+
+    # Weak fallback: whole document (rarely used for exact selection)
+    try:
+      doc = pattern.GetDocumentRange()
+      if doc:
+        t = _strip_trailing_punct(_txt(doc, -1))
+        if t:
+          return t
+    except Exception:
+      pass
+
   except Exception:
     pass
   return None
 
 def get_selection_for_hwnd(hwnd):
   """
-  Gets the selected text for a given window handle by trying several methods
-  in order of reliability and performance.
-
-  The order of methods is:
-  1. UI Automation (most modern and reliable).
-  2. Direct Windows messages (fast but limited to standard controls).
-  3. Simulating Ctrl+C (broadest compatibility but slower and intrusive).
-
-  Args:
-    hwnd (int): The window handle as an integer.
-
-  Returns:
-    The selected text as a string, or None if all methods fail.
+  Try in order:
+    1) UIA (with word expansion)
+    2) EM_GETSEL/WM_GETTEXT (with word-boundary expansion)
+    3) Simulated Ctrl+C
   """
   try:
     target = wintypes.HWND(int(hwnd))
   except Exception:
     return None
-    
+
   try:
-    # 1. Try with UI Automation first.
+    # 1) UIA
     res = try_ui_automation_text(target)
     if res:
-      return res
-      
-    # 2. If that fails, try with standard window messages.
+      # If UIA returned a too-short alpha prefix, do not return yet.
+      if len(res) <= 4 and re.match(r"^[A-Za-z]+$", res or ""):
+        pass  # fall through to EM_GETSEL path
+      else:
+        return res
+
+    # 2) EM_GETSEL path
     res = try_get_selection_from_hwnd(target)
     if res:
       return res
-      
-    # 3. As a last resort, try simulating Ctrl+C.
+
+    # 3) Simulate Ctrl+C
     res = send_ctrl_c_to_window(target)
     if res:
       return res
@@ -404,50 +728,73 @@ def get_selection_for_hwnd(hwnd):
 
 def get_selection_for_foreground():
   """
-  Gets the selected text from the currently active foreground window.
-  It intelligently finds the specific control that has focus and then
-  attempts to get the selection from it.
-
-  Returns:
-    The selected text as a string, or None if it cannot be retrieved.
+  Get the selected text from the current foreground control.
+  Order:
+    1) UIA (expand to word) — but DO NOT return if it looks like a short alpha prefix (e.g., "wat")
+    2) EM_GETSEL/WM_GETTEXT (handles real selection and caret-only; expands to word bounds)
+    3) Simulated Ctrl+C as a last resort
   """
   try:
-    # Get the handle of the window in the foreground.
     foreground = user32.GetForegroundWindow()
     if not foreground:
       return None
-      
-    # Get the thread and process ID for the foreground window.
+
+    # Find the focused child control for the foreground thread
     pid = wintypes.DWORD()
     threadId = user32.GetWindowThreadProcessId(foreground, ctypes.byref(pid))
-    
-    # Get detailed GUI thread info to find the focused control.
+
     gui_info = GUITHREADINFO()
     gui_info.cbSize = ctypes.sizeof(GUITHREADINFO)
     ok = user32.GetGUIThreadInfo(threadId, ctypes.byref(gui_info))
-    
-    # The focused handle is the most specific target. Fall back to active or foreground window.
+
     focused_handle = gui_info.hwndFocus or gui_info.hwndActive or foreground if ok else foreground
-    
-    if focused_handle:
-      # Use the same multi-method approach as get_selection_for_hwnd.
-      # 1. Try UI Automation.
-      res = try_ui_automation_text(focused_handle)
-      if res:
+    if not focused_handle:
+      return None
+
+    # 1) UIA — if it returns a short alpha prefix, do not return yet; fall through to EM_GETSEL
+    res = try_ui_automation_text(focused_handle)
+    if res:
+      if len(res) <= 4 and re.match(r"^[A-Za-z]+$", res or ""):
+        # Too-short alpha prefix like "wat" → let EM_GETSEL handle it with word-boundary expansion
+        pass
+      else:
         return res
-        
-      # 2. Try standard messages.
-      res = try_get_selection_from_hwnd(focused_handle)
-      if res:
-        return res
-        
-      # 3. Try simulating Ctrl+C.
-      res = send_ctrl_c_to_window(focused_handle)
-      if res:
-        return res
+
+    # 2) EM_GETSEL/WM_GETTEXT — this path expands to full word bounds and handles caret-only cases
+    res = try_get_selection_from_hwnd(focused_handle)
+    if res:
+      return res
+
+    # 3) Simulate Ctrl+C — broad compatibility fallback
+    res = send_ctrl_c_to_window(focused_handle)
+    if res:
+      return res
+
   except Exception:
     return None
   return None
+
+def _expand_word_bounds(full_text, start, end):
+  """
+  Given the full control text and a (start, end) selection range,
+  expand the range to cover the entire English-like word (letters, apostrophe, hyphen).
+  Returns (expanded_text, new_start, new_end).
+  """
+  if not isinstance(full_text, str):
+    return None, start, end
+  n = len(full_text)
+  L = max(0, int(start))
+  R = max(L, int(end))
+
+  # Move left while previous char is part of a word.
+  while L > 0 and re.match(r"[A-Za-z'\-]", full_text[L - 1]):
+    L -= 1
+  # Move right while next char is part of a word.
+  while R < n and re.match(r"[A-Za-z'\-]", full_text[R]):
+    R += 1
+
+  expanded = full_text[L:R].strip()
+  return (expanded if expanded else None), L, R
 
 def main():
   """
