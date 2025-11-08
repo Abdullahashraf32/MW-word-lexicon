@@ -43,9 +43,18 @@ except Exception:
     import selection_helper
   except Exception:
     selection_helper = None
+import tones
 
 # Global variable to track any currently open dialog created by this addon.
 OPEN_DIALOG = None
+
+def finally_(func, final):
+  def new(*args, **kwargs):
+    try:
+      func(*args, **kwargs)
+    finally:
+      final()
+  return new
 
 def normalize_selected_word(raw):
   """
@@ -559,6 +568,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
   def __init__(self):
     super().__init__()
     # Double-press tracking and internal state.
+    self.toggling = False
     self.last_definition_press_time = None
     self.last_wotd_press_time = None
     self.last_definition_text = None
@@ -616,6 +626,28 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           cls_list.append(MwWordLexiconSettingsPanel)
     except Exception:
       # Never let registration errors crash NVDA startup.
+      pass
+
+  def getScript(self, gesture):
+    if not self.toggling:
+      return super().getScript(gesture)
+    script = super().getScript(gesture)
+    if not script:
+      script = finally_(self.script_error, self.finish)
+    return finally_(script, self.finish)
+
+  def finish(self):
+    self.toggling = False
+    try:
+      self.clearGestureBindings()
+      self.bindGestures(self.__gestures)
+    except Exception:
+      pass
+
+  def script_error(self, gesture):
+    try:
+      tones.beep(120, 100)
+    except Exception:
       pass
 
   def _updateAndSaveHistory(self, new_history, prune=True):
@@ -880,7 +912,34 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     thread.daemon = True
     thread.start()
 
-  @script(description="Cycle copy/display modes", gesture="kb:control+shift+a")
+  @script(
+      description="MW Lexicon layer commands. Press a/s/d/h/t/u.", 
+      gesture="kb:control+shift+d"
+      )
+  def script_mainLayer(self, gesture):
+    if self.toggling:
+      self.script_error(gesture)
+      return
+    self.bindGestures(self.__LayerGestures)
+    self.toggling = True
+    try:
+      tones.beep(100, 10)
+    except Exception:
+      pass
+
+  __LayerGestures = {
+    "kb:a": "cycle_copy_mode",
+    "kb:w": "word_of_the_day",
+    "kb:s": "showSearchDialog",
+    "kb:d": "get_definition_with_smart_copy",
+    "kb:h": "show_history_list",
+    "kb:t": "get_thesaurus",
+    "kb:u": "get_antonyms",
+  }
+
+  @script(
+      description="Cycle copy/display modes",
+           )
   def script_cycle_copy_mode(self, gesture):
     self.copy_mode = (self.copy_mode + 1) % 3
     try:
@@ -899,7 +958,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       pass
     ui.message(["Auto copy", "Double press to copy", "Copy and show dialog"][self.copy_mode])
 
-  @script(description="Open Search Dialog", gesture="kb:nvda+alt+a")
+  @script(
+      description="Open Search Dialog", 
+      )
   def script_showSearchDialog(self, gesture):
     global OPEN_DIALOG
     if OPEN_DIALOG:
@@ -915,7 +976,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     except Exception as e:
       ui.message(f"Error opening search dialog: {e}")
 
-  @script(description="Get word definition or copy last one if pressed quickly twice.", gesture="kb:control+shift+d")
+  @script(
+      description="Get word definition or copy last one if pressed quickly twice.", 
+      )
   def script_get_definition_with_smart_copy(self, gesture):
     now = time.time()
     if self.copy_mode in (1, 2):
@@ -949,7 +1012,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     self.threaded_request(get_and_cache_definition, word)
 
-  @script(description="Get Word of the Day with examples or copy them on quick second press.", gesture="kb:control+shift+w")
+  @script(
+      description="Get Word of the Day with examples or copy them on quick second press.", 
+      )
   def script_word_of_the_day(self, gesture):
     now = time.time()
     if self.copy_mode == 1:
@@ -984,7 +1049,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     self.threaded_request(get_full_wotd)
 
-  @script(description="Show or cycle through history", gesture="kb:control+shift+h")
+  @script(
+      description="Show or cycle through history", 
+      )
   def script_show_history_list(self, gesture):
     if not GlobalPlugin.history:
       ui.message("No history available.")
@@ -1055,7 +1122,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       except Exception:
         ui.message("History UI error.")
 
-  @script(description="Get thesaurus (synonyms) for the selected word.", gesture="kb:control+shift+t")
+  @script(
+      description="Get thesaurus (synonyms) for the selected word.", 
+      )
   def script_get_thesaurus(self, gesture):
     now = time.time()
     if self.copy_mode == 1:
@@ -1080,7 +1149,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     self.threaded_request(get_and_cache_thesaurus, word)
 
-  @script(description="Get antonyms for the selected word.", gesture="kb:control+shift+u")
+  @script(
+      description="Get antonyms for the selected word.", 
+      )
   def script_get_antonyms(self, gesture):
     now = time.time()
     if self.copy_mode == 1:
