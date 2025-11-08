@@ -403,7 +403,7 @@ def handle_double_press(last_time, current_time, cached_text, label="Text"):
   If key press is within 1.5 seconds of last_time, copy cached_text to clipboard.
   Returns "copied", "empty", or "no".
   """
-  if last_time and (current_time - last_time) < 1.5:
+  if last_time and (current_time - last_time) < 2.0:
     if cached_text:
       api.copyToClip(cached_text)
       ui.message(f"{label} copied to clipboard.")
@@ -573,6 +573,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.last_wotd_press_time = None
     self.last_definition_text = None
     self.word_of_the_day_text = None
+    self._layer_waiting_double_press = False
+    self._layer_hold_started = 0
+    self._layer_hold_timer = None
     ensure_config_section(SECTION)
     try:
       self.history_size = int(config.conf["mwWordLexicon"].get("history_size", 3))
@@ -628,12 +631,64 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       # Never let registration errors crash NVDA startup.
       pass
 
+  def _release_hold_if_expired(self):
+    try:
+      if self._layer_waiting_double_press and (time.time() - self._layer_hold_started) >= 1.5:
+        self._layer_waiting_double_press = False
+        self.finish()
+    except Exception:
+      pass
+
+  def _hold_layer_for_double_press(self):
+    self._layer_waiting_double_press = True
+    self._layer_hold_started = time.time()
+    try:
+      if self._layer_hold_timer and self._layer_hold_timer.IsRunning():
+        self._layer_hold_timer.Stop()
+    except Exception:
+      pass
+    try:
+      self._layer_hold_timer = wx.CallLater(1600, self._release_hold_if_expired)
+    except Exception:
+      pass
+
   def getScript(self, gesture):
+    # If we're not currently inside the layer mode, return the normal script resolution.
     if not self.toggling:
       return super().getScript(gesture)
+
+    # Try retrieving the script normally from NVDA.
     script = super().getScript(gesture)
     if not script:
-      script = finally_(self.script_error, self.finish)
+      # If the gesture has no matching script, keep the original error behavior.
+      return finally_(self.script_error, self.finish)
+
+    # Scripts that support double-press inside the layer.
+    # These scripts must not be wrapped with "finish", otherwise the layer closes
+    # before the second press is detected.
+    double_press_layer_cmds = {
+      "script_get_definition_with_smart_copy",
+      "script_get_thesaurus",
+      "script_get_antonyms",
+      "script_word_of_the_day",
+    }
+
+    # If copy mode is double-press mode (mode 1) and this script is one of the
+    # double-press scripts, return it as-is so that the layer stays active.
+    if self.copy_mode == 1:
+      try:
+        name = getattr(script, "__name__", "")
+      except Exception:
+        name = ""
+      if name in double_press_layer_cmds:
+        return script
+
+    # If we're already waiting for the second press, do not wrap the script either.
+    # This keeps the layer open until the script itself decides to close it.
+    if self._layer_waiting_double_press and self.copy_mode == 1:
+      return script
+
+    # Otherwise, wrap the script so that the layer closes after execution (default behavior).
     return finally_(script, self.finish)
 
   def finish(self):
@@ -993,11 +1048,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if status == "copied":
           self._addToHistory(self.last_definition_text)
           self.last_definition_text = None
+        if self.copy_mode == 1:
+          self._layer_waiting_double_press = False
+          self.finish()
         return
     if self.copy_mode == 2:
       self.last_copy_mode2_press_time = now
     else:
       self.last_definition_press_time = now
+      if self.copy_mode == 1:
+        self._hold_layer_for_double_press()
 
     word = get_valid_selected_word()
     if not word:
@@ -1023,8 +1083,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if status == "copied":
           self._addToHistory(self.word_of_the_day_text)
           self.word_of_the_day_text = None
+        self._layer_waiting_double_press = False
+        self.finish()
         return
     self.last_wotd_press_time = now
+    if self.copy_mode == 1:
+      self._hold_layer_for_double_press()
 
     def get_full_wotd():
       raw = get_word_of_the_day()
@@ -1133,14 +1197,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if status == "copied":
           self._addToHistory(self.last_thesaurus_text)
           self.last_thesaurus_text = None
+        self._layer_waiting_double_press = False
+        self.finish()
         return
     self.last_thesaurus_press_time = now
+    if self.copy_mode == 1:
+      self._hold_layer_for_double_press()
 
     word = get_valid_selected_word()
     if not word:
       return
     self.last_selected_word = word
-    
+
     def get_and_cache_thesaurus(word_to_lookup):
       result = thesaurus.get_word_thesaurus(word_to_lookup)
       if result:
@@ -1160,8 +1228,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if status == "copied":
           self._addToHistory(self.last_antonyms_text)
           self.last_antonyms_text = None
+        self._layer_waiting_double_press = False
+        self.finish()
         return
     self.last_antonyms_press_time = now
+    if self.copy_mode == 1:
+      self._hold_layer_for_double_press()
 
     word = get_valid_selected_word()
     if not word:
