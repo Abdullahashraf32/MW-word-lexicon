@@ -15,6 +15,7 @@
             <h2>Table of Contents</h2>
             <ul>
                 <li><a href="#introduction">Introduction</a></li>
+                <li><a href="#v1.1update">v1.1: What's New</a></li>
                 <li><a href="#features">Key Features</a></li>
                 <li><a href="#dialogs">Understanding the Interactive Dialogs</a></li>
                 <li><a href="#settings">Settings and Customization</a></li>
@@ -34,6 +35,34 @@
                 This add-on uses the <strong>Merriam-Webster Dictionary API</strong> because it offers a generous free plan of <strong>1,000 requests per day</strong>. This ensures the add-on can remain free and reliable for all users. As a non-profit project, using a service that does not require payment was a key consideration during the add-on's design phases.
             </p>
         </section>
+<section id="v1.1update">
+    <h2>v1.1: What's New</h2>
+    <p>
+        This update introduces important stability fixes and improvements that make the add-on more reliable and easier to use.
+    </p>
+
+    <h3>1. More Stable Play Button in the Definition Dialog</h3>
+    <p>
+        The Play button in the "Copy and Show Dialog" mode has been fully fixed. 
+        Previously, the button sometimes failed to appear, which made it impossible to listen to the pronunciation directly from the dialog. 
+        This issue is now resolved, and the button appears consistently every time, making pronunciation playback smoother and more dependable.
+    </p>
+
+    <h3>2. Major Improvements to Text Selection Handling</h3>
+    <p>
+        Text selection is now handled much more accurately across different applications.  
+        The add-on can now correctly detect selected words in editors like Notepad and WordPad, and it also works better inside bulleted and numbered lists.  
+        This fix solves a long-standing issue where the add-on sometimes ignored the selected word or picked an incomplete part of it.
+    </p>
+
+    <h3>3. New Layer-Based Shortcut System</h3>
+    <p>
+        Instead of using many global shortcuts that could conflict with other programs, version 1.1 introduces a cleaner and safer shortcut system.  
+        Now, you only need to press <code>Control+Shift+D</code> to enter the add-on’s <strong>main layer</strong>.  
+        After entering this layer, you simply press a single letter (such as <code>a</code>, <code>d</code>, <code>t</code>, etc.) to perform the desired action.  
+        This design keeps your keyboard clean, avoids shortcut conflicts, and makes the add-on easier to remember and use.
+    </p>
+</section>
 
         <section id="features">
             <h2>Key Features</h2>
@@ -109,16 +138,22 @@
             <h2>Add-on Shortcuts</h2>
             
             <h3>General Shortcuts</h3>
+           <p>
+    To use the add-on general shortcuts, you must first press <code>Control+Shift+D</code> to enter the add-on’s main layer.  
+    While inside this layer, press a single letter to perform an action such as getting a definition, showing synonyms, getting the Word of the Day, cycling history, and more.  
+    This system reduces shortcut conflicts with other applications and keeps the keyboard layout simple and organized.
+</p>
             <table>
                 <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
                 <tbody>
-                    <tr><td><code>Control+Shift+D</code></td><td>Get the definition for the selected word in the window.</td></tr>
-                    <tr><td><code>Control+Shift+T</code></td><td>Get synonyms for the selected word in the window.</td></tr>
-                    <tr><td><code>Control+Shift+U</code></td><td>Get antonyms for the selected word in the window.</td></tr>
-                    <tr><td><code>Control+Shift+W</code></td><td>Get the Word of the Day.</td></tr>
-                    <tr><td><code>Control+Shift+H</code></td><td>Show or cycle through history, depending on your preferred settings.</td></tr>
-                    <tr><td><code>Control+Shift+A</code></td><td>Switch between the three "display/show" output modes.</td></tr>
-                    <tr><td><code>NVDA+Alt+A</code></td><td>Open the manual search dialog.</td></tr>
+<tr><td><code>control+shift+D</code></td><td>enter the add-on’s main layer which manages you to perform the complete add-on's general shortcuts list.</td></tr>
+                    <tr><td><code>D</code></td><td>Get the definition for the selected word in the window.</td></tr>
+                    <tr><td><code>T</code></td><td>Get synonyms for the selected word in the window.</td></tr>
+                    <tr><td><code>U</code></td><td>Get antonyms for the selected word in the window.</td></tr>
+                    <tr><td><code>W</code></td><td>Get the Word of the Day.</td></tr>
+                    <tr><td><code>H</code></td><td>Show or cycle through history, depending on your preferred settings.</td></tr>
+                    <tr><td><code>A</code></td><td>Switch between the three "display/show" output modes.</td></tr>
+                    <tr><td><code>S</code></td><td>Open the manual search dialog.</td></tr>
                 </tbody>
             </table>
 
