@@ -608,15 +608,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.last_antonyms_press_time = None
     self.last_antonyms_text = None
 
-    # Start background retention thread.
+    # defer starting the retention worker slightly to avoid blocking NVDA startup
     self._retention_stop_event = threading.Event()
-    self._retention_thread = threading.Thread(target=self._retention_worker)
-    self._retention_thread.daemon = True
-    self._retention_thread.start()
+    self._retention_thread = None
     try:
-      self._periodic_prune_check()
+      # start the thread after 1 second (main GUI thread scheduling)
+      wx.CallLater(1000, lambda: self._start_retention_thread())
     except Exception:
-      pass
+      # fallback: start immediately if CallLater unavailable
+      try:
+        self._start_retention_thread()
+      except Exception:
+        pass
 
     # Defensive registration of the settings panel. Append only if not present.
     try:
@@ -682,6 +685,35 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         name = ""
       if name in double_press_layer_cmds:
         return script
+
+    # Special handling for the history key 'h':
+    # Read the current cycle_history setting directly from config so we react
+    # immediately to changes in settings panel (don't rely on self.cycle_history).
+    try:
+      sname = getattr(script, "__name__", "")
+    except Exception:
+      sname = ""
+
+    if sname == "script_show_history_list":
+      try:
+        sec = ensure_config_section(SECTION)
+        cv = sec.get("cycle_history", False)
+        if isinstance(cv, str):
+          cycle_enabled = cv.lower() == "true"
+        else:
+          cycle_enabled = bool(cv)
+      except Exception:
+        cycle_enabled = getattr(self, "cycle_history", False)
+
+      # If cycle_history is enabled in config, return the script unwrapped
+      # so 'h' keeps the layer open and cycles items.
+      if cycle_enabled:
+        return script
+
+      # If cycle_history is disabled, do NOT return here — let default wrapping
+      # apply so the layer will be closed after the script runs.
+      # Note: script_show_history_list will itself call self.finish() before
+      # opening the dialog; wrapping is an extra safety to ensure the layer stops.
 
     # If we're already waiting for the second press, do not wrap the script either.
     # This keeps the layer open until the script itself decides to close it.
@@ -766,6 +798,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     try:
       while not self._retention_stop_event.wait(30):
         self._periodic_prune_check()
+    except Exception:
+      pass
+
+  def _start_retention_thread(self):
+    try:
+      if self._retention_thread and self._retention_thread.is_alive():
+        return
+    except Exception:
+      pass
+    try:
+      self._retention_thread = threading.Thread(target=self._retention_worker)
+      self._retention_thread.daemon = True
+      self._retention_thread.start()
+      # run one prune check asynchronously to avoid blocking main thread
+      wx.CallLater(50, self._periodic_prune_check)
     except Exception:
       pass
 
@@ -1114,77 +1161,103 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.threaded_request(get_full_wotd)
 
   @script(
-      description="Show or cycle through history", 
-      )
+    description="Show or cycle through history", 
+)
   def script_show_history_list(self, gesture):
+    # Read the current cycle_history setting directly from config to ensure
+    # immediate effect after saving settings (no need to rely on self.cycle_history).
+    try:
+      sec = ensure_config_section(SECTION)
+      cv = sec.get("cycle_history", False)
+      if isinstance(cv, str):
+        cycle_enabled = cv.lower() == "true"
+      else:
+        cycle_enabled = bool(cv)
+    except Exception:
+      cycle_enabled = getattr(self, "cycle_history", False)
+
     if not GlobalPlugin.history:
       ui.message("No history available.")
       return
 
-    if self.cycle_history:
-      GlobalPlugin.historyIndex = (GlobalPlugin.historyIndex + 1) % len(GlobalPlugin.history)
-      reversed_history = list(reversed([h.get("text") for h in GlobalPlugin.history]))
-      item_to_copy = reversed_history[GlobalPlugin.historyIndex]
+    if cycle_enabled:
+      # Cycle mode: move index, copy the current item and keep the layer active.
       try:
-        api.copyToClip(item_to_copy)
-        ui.message(item_to_copy)
+        GlobalPlugin.historyIndex = (GlobalPlugin.historyIndex + 1) % len(GlobalPlugin.history)
+        reversed_history = list(reversed([h.get("text") for h in GlobalPlugin.history]))
+        item_to_copy = reversed_history[GlobalPlugin.historyIndex]
+        try:
+          api.copyToClip(item_to_copy)
+          ui.message(item_to_copy)
+        except Exception:
+          ui.message("Failed to copy history item.")
       except Exception:
-        ui.message("Failed to copy history item.")
-    else:
+        ui.message("History cycle error.")
+      return
+
+    # Fallback: open the full history dialog (original behaviour)
+    try:
+      global OPEN_DIALOG
+      if OPEN_DIALOG:
+        ui.message("Please close the open dialog before opening another.")
+        return
+
+      # Close the layer immediately before opening the dialog so the layer
+      # does not remain active while the dialog is shown.
       try:
-        global OPEN_DIALOG
-        if OPEN_DIALOG:
-          ui.message("Please close the open dialog before opening another.")
-          return
-        frame = wx.Frame(None, title="mwWordLexicon — History", size=(700, 400))
-        OPEN_DIALOG = frame
-        panel = wx.Panel(frame)
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        lbl = wx.StaticText(panel, label="Right-click for options or use keyboard shortcuts:")
-        sizer.Add(lbl, 0, wx.EXPAND | wx.ALL, 8)
-
-        items = [entry.get("text") if isinstance(entry, dict) else str(entry) for entry in reversed(GlobalPlugin.history)]
-        lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
-        sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
-
-        close_btn = wx.Button(panel, label="Close")
-        sizer.Add(close_btn, 0, wx.ALIGN_CENTER | wx.ALL, 8)
-
-        def do_copy_selected(event=None):
-          sel = lb.GetSelection(); text = lb.GetString(sel)
-          api.copyToClip(text); ui.message("History item copied.")
-        def do_copy_all(event=None):
-          all_items = "\n\n".join(lb.GetItems())
-          api.copyToClip(all_items); ui.message("All history items copied.")
-        def do_remove_selected(event=None):
-          sel = lb.GetSelection(); original_index = len(GlobalPlugin.history) - 1 - sel
-          GlobalPlugin.history.pop(original_index); self._updateAndSaveHistory(GlobalPlugin.history)
-          lb.Delete(sel); ui.message("Item removed.")
-          if lb.GetCount() > 0: lb.SetSelection(min(sel, lb.GetCount() - 1))
-        def do_clear_history(event=None):
-          dialog = wx.MessageDialog(frame, "Are you sure?", "Confirm Clear", wx.YES_NO | wx.ICON_WARNING)
-          if dialog.ShowModal() == wx.ID_YES:
-            self._updateAndSaveHistory([]); lb.Clear(); ui.message("History cleared."); frame.Close()
-          dialog.Destroy()
-
-        ID_COPY, ID_COPY_ALL, ID_REMOVE, ID_CLEAR = wx.NewIdRef(), wx.NewIdRef(), wx.NewIdRef(), wx.NewIdRef()
-        def on_context_menu(event):
-          menu = wx.Menu(); menu.Append(ID_COPY, "Copy\tCtrl+C"); menu.Append(ID_COPY_ALL, "Copy All\tCtrl+Shift+C")
-          menu.AppendSeparator(); menu.Append(ID_REMOVE, "Remove\tDelete"); menu.Append(ID_CLEAR, "Clear\tShift+Delete")
-          frame.PopupMenu(menu); menu.Destroy()
-
-        lb.Bind(wx.EVT_CONTEXT_MENU, on_context_menu)
-        frame.Bind(wx.EVT_MENU, do_copy_selected, id=ID_COPY); frame.Bind(wx.EVT_MENU, do_copy_all, id=ID_COPY_ALL)
-        frame.Bind(wx.EVT_MENU, do_remove_selected, id=ID_REMOVE); frame.Bind(wx.EVT_MENU, do_clear_history, id=ID_CLEAR)
-        close_btn.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
-        accel_tbl = wx.AcceleratorTable([(wx.ACCEL_CTRL, ord('C'), ID_COPY), (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord('C'), ID_COPY_ALL), (wx.ACCEL_NORMAL, wx.WXK_DELETE, ID_REMOVE), (wx.ACCEL_SHIFT, wx.WXK_DELETE, ID_CLEAR)])
-        frame.SetAcceleratorTable(accel_tbl)
-        frame.Bind(wx.EVT_CHAR_HOOK, lambda evt: frame.Close() if evt.GetKeyCode() == wx.WXK_ESCAPE else evt.Skip())
-        frame.Bind(wx.EVT_CLOSE, lambda evt: _clear_open_dialog(evt, frame))
-
-        panel.SetSizer(sizer); frame.Show(); frame.Raise(); wx.CallAfter(lb.SetFocus)
+        self.finish()
       except Exception:
-        ui.message("History UI error.")
+        pass
+
+      frame = wx.Frame(None, title="mwWordLexicon — History", size=(700, 400))
+      OPEN_DIALOG = frame
+      panel = wx.Panel(frame)
+      sizer = wx.BoxSizer(wx.VERTICAL)
+      lbl = wx.StaticText(panel, label="Right-click for options or use keyboard shortcuts:")
+      sizer.Add(lbl, 0, wx.EXPAND | wx.ALL, 8)
+
+      items = [entry.get("text") if isinstance(entry, dict) else str(entry) for entry in reversed(GlobalPlugin.history)]
+      lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
+      sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
+
+      close_btn = wx.Button(panel, label="Close")
+      sizer.Add(close_btn, 0, wx.ALIGN_CENTER | wx.ALL, 8)
+
+      def do_copy_selected(event=None):
+        sel = lb.GetSelection(); text = lb.GetString(sel)
+        api.copyToClip(text); ui.message("History item copied.")
+      def do_copy_all(event=None):
+        all_items = "\n\n".join(lb.GetItems())
+        api.copyToClip(all_items); ui.message("All history items copied.")
+      def do_remove_selected(event=None):
+        sel = lb.GetSelection(); original_index = len(GlobalPlugin.history) - 1 - sel
+        GlobalPlugin.history.pop(original_index); self._updateAndSaveHistory(GlobalPlugin.history)
+        lb.Delete(sel); ui.message("Item removed.")
+        if lb.GetCount() > 0: lb.SetSelection(min(sel, lb.GetCount() - 1))
+      def do_clear_history(event=None):
+        dialog = wx.MessageDialog(frame, "Are you sure?", "Confirm Clear", wx.YES_NO | wx.ICON_WARNING)
+        if dialog.ShowModal() == wx.ID_YES:
+          self._updateAndSaveHistory([]); lb.Clear(); ui.message("History cleared."); frame.Close()
+        dialog.Destroy()
+
+      ID_COPY, ID_COPY_ALL, ID_REMOVE, ID_CLEAR = wx.NewIdRef(), wx.NewIdRef(), wx.NewIdRef(), wx.NewIdRef()
+      def on_context_menu(event):
+        menu = wx.Menu(); menu.Append(ID_COPY, "Copy\tCtrl+C"); menu.Append(ID_COPY_ALL, "Copy All\tCtrl+Shift+C")
+        menu.AppendSeparator(); menu.Append(ID_REMOVE, "Remove\tDelete"); menu.Append(ID_CLEAR, "Clear\tShift+Delete")
+        frame.PopupMenu(menu); menu.Destroy()
+
+      lb.Bind(wx.EVT_CONTEXT_MENU, on_context_menu)
+      frame.Bind(wx.EVT_MENU, do_copy_selected, id=ID_COPY); frame.Bind(wx.EVT_MENU, do_copy_all, id=ID_COPY_ALL)
+      frame.Bind(wx.EVT_MENU, do_remove_selected, id=ID_REMOVE); frame.Bind(wx.EVT_MENU, do_clear_history, id=ID_CLEAR)
+      close_btn.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
+      accel_tbl = wx.AcceleratorTable([(wx.ACCEL_CTRL, ord('C'), ID_COPY), (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord('C'), ID_COPY_ALL), (wx.ACCEL_NORMAL, wx.WXK_DELETE, ID_REMOVE), (wx.ACCEL_SHIFT, wx.WXK_DELETE, ID_CLEAR)])
+      frame.SetAcceleratorTable(accel_tbl)
+      frame.Bind(wx.EVT_CHAR_HOOK, lambda evt: frame.Close() if evt.GetKeyCode() == wx.WXK_ESCAPE else evt.Skip())
+      frame.Bind(wx.EVT_CLOSE, lambda evt: _clear_open_dialog(evt, frame))
+
+      panel.SetSizer(sizer); frame.Show(); frame.Raise(); wx.CallAfter(lb.SetFocus)
+    except Exception:
+      ui.message("History UI error.")
 
   @script(
       description="Get thesaurus (synonyms) for the selected word.", 
@@ -1500,7 +1573,7 @@ class MwWordLexiconSettingsPanel(gui.settingsDialogs.SettingsPanel):
         retention_value = 0
 
       try:
-        retention_unit = str(self.retention_unit.GetValue() or "days")
+        retention_unit = str(self.retention_unit.GetValue() or "days").strip().lower()
       except Exception:
         retention_unit = "days"
 
@@ -1529,32 +1602,27 @@ class MwWordLexiconSettingsPanel(gui.settingsDialogs.SettingsPanel):
     def update_running_plugins():
       try:
         for plugin in list(globalPluginHandler.runningPlugins):
-          if hasattr(plugin, "script_get_definition_with_smart_copy") or plugin.__class__.__name__.endswith("GlobalPlugin"):
-            try:
-              plugin.history_size = new_size
-            except Exception:
-              pass
-            try:
-              plugin.cycle_history = cycle_val
-            except Exception:
-              pass
-            try:
-              while len(plugin.history) > new_size:
-                plugin.history.pop(0)
-            except Exception:
-              pass
-            try:
-              if hasattr(plugin, "_updateAndSaveHistory"):
-                plugin._updateAndSaveHistory(plugin.history, prune=False)
-            except Exception:
-              pass
-            break
+          # Update only plugins that look like mw-word-lexicon (defensive check).
+          if not (hasattr(plugin, "script_get_definition_with_smart_copy") or plugin.__class__.__name__.endswith("GlobalPlugin")):
+            continue
+          try:
+            plugin.history_size = new_size
+          except Exception:
+            pass
+          try:
+            plugin.cycle_history = cycle_val
+          except Exception:
+            pass
+          try:
+            while len(plugin.history) > new_size:
+              plugin.history.pop(0)
+          except Exception:
+            pass
+          try:
+            if hasattr(plugin, "_updateAndSaveHistory"):
+              plugin._updateAndSaveHistory(plugin.history, prune=False)
+          except Exception:
+            pass
+        # end for
       except Exception:
         pass
-
-    try:
-      t = threading.Thread(target=update_running_plugins)
-      t.daemon = True
-      t.start()
-    except Exception:
-      pass
