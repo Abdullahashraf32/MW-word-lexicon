@@ -1160,6 +1160,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     self.threaded_request(get_full_wotd)
 
+  def _schedule_layer_close(self, delay=2000):
+    """
+    Helper to close the layer after a specific delay (in ms).
+    Resets any existing timer to keep the layer open while cycling.
+    """
+    try:
+      if self._layer_hold_timer and self._layer_hold_timer.IsRunning():
+        self._layer_hold_timer.Stop()
+    except Exception:
+      pass
+    try:
+      self._layer_hold_timer = wx.CallLater(delay, self.finish)
+    except Exception:
+      pass
+
   @script(
     description="Show or cycle through history", 
 )
@@ -1178,10 +1193,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     if not GlobalPlugin.history:
       ui.message("No history available.")
+      # Ensure layer closes if there is nothing to show
+      self.finish()
       return
 
     if cycle_enabled:
       # Cycle mode: move index, copy the current item and keep the layer active.
+      # Reset the auto-close timer to 2 seconds on each press to allow smooth cycling.
+      self._schedule_layer_close(2000)
+
       try:
         GlobalPlugin.historyIndex = (GlobalPlugin.historyIndex + 1) % len(GlobalPlugin.history)
         reversed_history = list(reversed([h.get("text") for h in GlobalPlugin.history]))
