@@ -686,13 +686,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       if name in double_press_layer_cmds:
         return script
 
-    # Special handling for the history key 'h':
+    # Special handling for specific keys like 'h' (history) or 'a' (cycle mode):
     # Read the current cycle_history setting directly from config so we react
     # immediately to changes in settings panel (don't rely on self.cycle_history).
     try:
       sname = getattr(script, "__name__", "")
     except Exception:
       sname = ""
+
+    # Allow cycle mode script to handle its own closing (via timer)
+    if sname == "script_cycle_copy_mode":
+      return script
 
     if sname == "script_show_history_list":
       try:
@@ -1043,6 +1047,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       description="Cycle copy/display modes",
            )
   def script_cycle_copy_mode(self, gesture):
+    # Keep the layer open for 1 second (1000 ms) to allow smooth cycling
+    self._schedule_layer_close(1000)
+
     self.copy_mode = (self.copy_mode + 1) % 3
     try:
       config.conf["mwWordLexicon"]["copy_mode"] = self.copy_mode
@@ -1059,7 +1066,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     except Exception:
       pass
     ui.message(["Auto copy", "Double press to copy", "Copy and show dialog"][self.copy_mode])
-
+ 
   @script(
       description="Open Search Dialog", 
       )
