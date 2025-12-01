@@ -860,24 +860,41 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     text_ctrl = wx.TextCtrl(panel, value=text, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
     sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
 
-    speed_slider = None
-    volume_slider = None
+    # Load persistent audio settings
+    try:
+      conf = config.conf["mwWordLexicon"]
+      init_speed = int(conf.get("audio_speed", 100))
+      init_vol = int(conf.get("audio_volume", 100))
+    except Exception:
+      init_speed, init_vol = 100, 100
+
     play_button = wx.Button(panel, label="Play")
     sizer.Add(play_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
 
     speed_label = wx.StaticText(panel, label="Speed:")
     sizer.Add(speed_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
-    speed_slider = wx.Slider(panel, value=100, minValue=50, maxValue=200, style=wx.SL_HORIZONTAL)
+    speed_slider = wx.Slider(panel, value=init_speed, minValue=50, maxValue=200, style=wx.SL_HORIZONTAL)
     sizer.Add(speed_slider, 0, wx.EXPAND | wx.ALL, 10)
 
     volume_label = wx.StaticText(panel, label="Volume:")
     sizer.Add(volume_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
-    volume_slider = wx.Slider(panel, value=100, minValue=0, maxValue=100, style=wx.SL_HORIZONTAL)
+    volume_slider = wx.Slider(panel, value=init_vol, minValue=0, maxValue=100, style=wx.SL_HORIZONTAL)
     sizer.Add(volume_slider, 0, wx.EXPAND | wx.ALL, 10)
 
+    # Helper to save settings on change
+    def _save_audio_settings(evt=None):
+      try:
+        config.conf["mwWordLexicon"]["audio_speed"] = speed_slider.GetValue()
+        config.conf["mwWordLexicon"]["audio_volume"] = volume_slider.GetValue()
+      except Exception:
+        pass
+
+    speed_slider.Bind(wx.EVT_SLIDER, _save_audio_settings)
+    volume_slider.Bind(wx.EVT_SLIDER, _save_audio_settings)
+
     def do_play_for_url(url):
-      sp = speed_slider.GetValue() if speed_slider else 100
-      vol = volume_slider.GetValue() if volume_slider else 100
+      sp = speed_slider.GetValue()
+      vol = volume_slider.GetValue()
       play_with_ffplay(url, sp, vol)
 
       play_button.Bind(wx.EVT_BUTTON, lambda evt: threading.Thread(target=do_play_for_url, args=(audio_url,), daemon=True).start())
@@ -933,16 +950,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         return
 
       if evt.ShiftDown() and kc in (wx.WXK_UP, wx.WXK_DOWN):
-        if speed_slider:
-          cur = speed_slider.GetValue(); step = 5; newv = cur + (step if kc == wx.WXK_UP else -step)
-          newv = max(speed_slider.GetMin(), min(speed_slider.GetMax(), newv)); speed_slider.SetValue(newv)
-          ui.message(f"Speed {newv}%")
+        cur = speed_slider.GetValue(); step = 5; newv = cur + (step if kc == wx.WXK_UP else -step)
+        newv = max(speed_slider.GetMin(), min(speed_slider.GetMax(), newv)); speed_slider.SetValue(newv)
+        _save_audio_settings()
+        ui.message(f"Speed {newv}%")
         return
       if evt.ControlDown() and kc in (wx.WXK_UP, wx.WXK_DOWN):
-        if volume_slider:
-          cur = volume_slider.GetValue(); step = 5; newv = cur + (step if kc == wx.WXK_UP else -step)
-          newv = max(volume_slider.GetMin(), min(volume_slider.GetMax(), newv)); volume_slider.SetValue(newv)
-          ui.message(f"Volume {newv}%")
+        cur = volume_slider.GetValue(); step = 5; newv = cur + (step if kc == wx.WXK_UP else -step)
+        newv = max(volume_slider.GetMin(), min(volume_slider.GetMax(), newv)); volume_slider.SetValue(newv)
+        _save_audio_settings()
+        ui.message(f"Volume {newv}%")
         return
       evt.Skip()
 
@@ -1041,6 +1058,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     "kb:h": "show_history_list",
     "kb:t": "get_thesaurus",
     "kb:u": "get_antonyms",
+    "kb:p": "pronounce_selected_word",
   }
 
   @script(
@@ -1067,6 +1085,43 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       pass
     ui.message(["Auto copy", "Double press to copy", "Copy and show dialog"][self.copy_mode])
  
+  @script(
+    description="Pronounce the selected word using settings from definition dialog",
+  )
+  def script_pronounce_selected_word(self, gesture):
+    # Try to use the word from the last lookup if available (e.g. after pressing 'd'), 
+    # otherwise fetch selection.
+    word = getattr(self, "last_selected_word", None) or get_valid_selected_word()
+    if not word:
+      return
+    # Update last_selected_word just in case we fetched a new one
+    self.last_selected_word = word
+
+    def worker():
+      try:
+        data = http_get_json(DICTIONARY_API_URL.format(word))
+        aid = find_first_audio_id(data)
+        if not aid:
+          wx.CallAfter(ui.message, "No pronunciation found.")
+          return
+        url = build_mw_audio_url(aid)
+        
+        # Read settings from config (shared with definition dialog)
+        try:
+          conf = config.conf["mwWordLexicon"]
+          speed = int(conf.get("audio_speed", 100))
+          vol = int(conf.get("audio_volume", 100))
+        except Exception:
+          speed, vol = 100, 100
+        
+        play_with_ffplay(url, speed, vol)
+      except Exception:
+        wx.CallAfter(ui.message, "Pronunciation error.")
+
+    t = threading.Thread(target=worker)
+    t.daemon = True
+    t.start()
+
   @script(
       description="Open Search Dialog", 
       )
