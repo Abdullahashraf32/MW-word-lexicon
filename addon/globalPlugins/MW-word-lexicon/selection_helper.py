@@ -183,6 +183,9 @@ def get_strict_word_from_foreground():
     bufname = create_unicode_buffer(256)
     user32.GetClassNameW(target, bufname, ctypes.sizeof(bufname))
     cname = (bufname.value or "").lower()
+    
+    # FIX: If the focused window is NOT an Edit control (like a Browser window),
+    # search for children. If no children found, DO NOT fallback to 'target'.
     if not ("edit" in cname or "richedit" in cname or "richtextbox" in cname):
       found = _find_edit_like_child(foreground)
       if found:
@@ -194,7 +197,9 @@ def get_strict_word_from_foreground():
           if found2:
             target = found2
           else:
-            return None
+            return None # Abort if no Edit control found (prevents reading Window Title)
+        else:
+           return None # Abort if no Edit control found
 
     # Get selection range and entire text from the *text control* target
     start = wintypes.DWORD()
@@ -322,6 +327,11 @@ def try_get_selection_from_hwnd(focus):
     bufname = create_unicode_buffer(256)
     user32.GetClassNameW(focus, bufname, ctypes.sizeof(bufname))
     cname = (bufname.value or "").lower()
+
+    # STRICT CHECK: Only proceed if the control is an Edit or RichEdit.
+    # This prevents returning Window Titles for browsers or other apps.
+    if not ("edit" in cname or "richedit" in cname or "richtextbox" in cname):
+      return None
 
     if "edit" in cname or "richedit" in cname or "richtextbox" in cname:
       start = wintypes.DWORD()

@@ -27,6 +27,7 @@ from gui.settingsDialogs import SettingsPanel
 from . import thesaurus
 import json
 import threading
+import textInfos
 
 # Get the directory of the current addon.
 addon_dir = os.path.dirname(__file__)
@@ -277,95 +278,81 @@ def get_word_definition_from_proxy(word):
 
 def get_selected_text():
   """
-  Prefer exact UI selection via selection_helper (UIA/WM/Ctrl+C), then fall back.
-  Order:
-    1) Foreground control via selection_helper (most accurate for real selections).
-    2) Candidate hwnds from reviewPos via selection_helper.
-    3) Last resort: a small, single-line text from reviewPos properties.
+  Robustly retrieve text from:
+    1. System Selection (via selection_helper).
+    2. NVDA Caret/Focus (handling VirtualBuffers/Browsers).
+    3. NVDA Review Cursor.
   """
-  # 1) Foreground window (fast + accurate)
+  # 1) System Selection (Hardware selection - Ctrl+A, Mouse, etc.)
+  # This is the most accurate if the user has physically highlighted text.
   try:
     out = []
     th = threading.Thread(target=_call_selection_helper_foreground, args=(out,))
     th.daemon = True
     th.start()
-    th.join(0.9)
+    th.join(0.5) # Short timeout to keep UI responsive
     if out and out[0]:
       return out[0]
   except Exception:
     pass
 
-  # 2) Use reviewPos only to discover hwnd candidates; still fetch via selection_helper
+  # 2) NVDA Focus / Virtual Buffer (Browsers: Edge, Chrome, Firefox)
+  # When in browse mode, the actual text is in the treeInterceptor.
   try:
-    reviewPos = api.getReviewPosition()
-  except Exception:
-    reviewPos = None
+    focus_obj = api.getFocusObject()
+    if focus_obj:
+      # If inside a browser/virtual buffer, switch to the interceptor
+      if hasattr(focus_obj, "treeInterceptor") and focus_obj.treeInterceptor:
+        focus_obj = focus_obj.treeInterceptor
 
-  hwnd_candidates = []
-  if reviewPos:
-    try:
-      for attr_name in ("windowHandle", "hwnd"):
-        try:
-          wh = getattr(reviewPos, attr_name, None)
-          if wh is not None:
-            try:
-              hwnd_candidates.append(int(wh))
-            except Exception:
-              try:
-                hwnd_candidates.append(int(getattr(wh, "value", wh)))
-              except Exception:
-                pass
-        except Exception:
-          pass
-      appmod = getattr(reviewPos, "appModule", None)
-      if appmod:
-        wh = getattr(appmod, "helperLocalBindingHandle", None)
-        if wh is not None:
-          try:
-            hwnd_candidates.append(int(wh))
-          except Exception:
-            try:
-              hwnd_candidates.append(int(getattr(wh, "value", wh)))
-            except Exception:
-              pass
-    except Exception:
-      pass
-
-  for h in hwnd_candidates:
-    try:
-      out = []
-      th = threading.Thread(target=_call_selection_helper_for_hwnd, args=(h, out))
-      th.daemon = True
-      th.start()
-      th.join(0.9)
-      if out and out[0]:
-        return out[0]
-    except Exception:
-      pass
-
-  # 3) Last resort: restrict to small, single-line values from reviewPos
-  if reviewPos:
-    try:
-      for attr in ("value", "text", "displayText"):
-        try:
-          v = getattr(reviewPos, attr, None)
-        except Exception:
-          v = None
-        if isinstance(v, str):
-          v = v.strip()
-          if v and ("\n" not in v) and len(v) <= 64:
-            return v
+      # Try to get the text at the caret position
       try:
-        if hasattr(reviewPos, "getText"):
-          t = reviewPos.getText(0)
-          if isinstance(t, str):
+        info = focus_obj.makeTextInfo(textInfos.POSITION_CARET)
+        if info:
+          # Check if there is an actual selection range
+          if not info.isCollapsed:
+            return info.text
+          
+          # If collapsed (just a caret), expand to the word
+          info.expand(textInfos.UNIT_WORD)
+          t = info.text
+          if t and isinstance(t, str):
             t = t.strip()
-            if t and ("\n" not in t) and len(t) <= 64:
+            if t and len(t) < 64 and "\n" not in t:
               return t
       except Exception:
         pass
-    except Exception:
-      pass
+  except Exception:
+    pass
+
+  # 3) Review Cursor (Review Mode)
+  # This handles cases where the user is using NumPad to review text.
+  try:
+    reviewPos = api.getReviewPosition()
+    if reviewPos:
+      # We must ensure it's a TextInfo object to avoid getting Window Titles
+      if isinstance(reviewPos, textInfos.TextInfo):
+        info = reviewPos.copy()
+        if info.isCollapsed:
+          info.expand(textInfos.UNIT_WORD)
+        
+        t = info.text
+        if t and isinstance(t, str):
+          t = t.strip()
+          if t and len(t) < 64 and "\n" not in t:
+            return t
+  except Exception:
+    pass
+
+  # 4) Fallback: Simulate Ctrl+C via selection_helper only if we really have no other clue.
+  # We avoid generic object.name checks here to prevent "Google Chrome" return.
+  try:
+    if selection_helper and hasattr(selection_helper, "send_ctrl_c_to_window"):
+      fg = user32.GetForegroundWindow()
+      if fg:
+        return selection_helper.send_ctrl_c_to_window(fg, timeout=0.1)
+  except Exception:
+    pass
 
   return None
 
