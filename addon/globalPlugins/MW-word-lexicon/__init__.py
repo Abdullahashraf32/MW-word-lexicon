@@ -29,6 +29,7 @@ import json
 import threading
 import textInfos
 import nvwave
+import webbrowser
 
 # Get the directory of the current addon.
 addon_dir = os.path.dirname(__file__)
@@ -1135,6 +1136,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     "kb:t": "get_thesaurus",
     "kb:u": "get_antonyms",
     "kb:p": "pronounce_selected_word",
+    "kb:f1": "open_user_guide",
   }
 
   @script(
@@ -1216,6 +1218,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         wx.CallAfter(dialog.on_search, None)
     except Exception as e:
       ui.message(f"Error opening search dialog: {e}")
+
+  @script(
+    description="Open the add-on's user guide from its dedicated link",
+  )
+  def script_open_user_guide(self, gesture):
+    webbrowser.open("https://mw-word-lexicon.netlify.app")
+    self.finish()
 
   @script(
       description="Get word definition or copy last one if pressed quickly twice.", 
