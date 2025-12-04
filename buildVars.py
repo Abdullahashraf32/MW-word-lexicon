@@ -28,7 +28,7 @@ addon_info = {
 						The add-on offers convenient keyboard shortcuts to trigger these functions, enhancing accessibility and usability for NVDA users.
 						"""),
 	# version
-	"addon_version": "1.0",
+	"addon_version": "1.3",
 	# Author(s)
 	"addon_author": "Abdullah Ashraf <abdullahashraf4846@gmail.com",
 	# URL for the add-on documentation support
@@ -40,7 +40,7 @@ addon_info = {
 	# Minimum NVDA version supported (e.g. "2019.3.0", minor version is optional)
 	"addon_minimumNVDAVersion": "2024.1",
 	# Last NVDA version supported/tested (e.g. "2024.4.0", ideally more recent than minimum version)
-	"addon_lastTestedNVDAVersion": "2025.3",
+	"addon_lastTestedNVDAVersion": "2025.3.2",
 	# Add-on update channel (default is None, denoting stable releases,
 	# and for development releases, use "dev".)
 	# Do not change unless you know what you are doing!

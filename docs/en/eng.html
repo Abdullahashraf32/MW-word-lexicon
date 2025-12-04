@@ -15,7 +15,7 @@
             <h2>Table of Contents</h2>
             <ul>
                 <li><a href="#introduction">Introduction</a></li>
-                <li><a href="#v1.1update">v1.1: What's New</a></li>
+                <li><a href="#v1.3update">v1.3: What's New</a></li>
                 <li><a href="#features">Key Features</a></li>
                 <li><a href="#dialogs">Understanding the Interactive Dialogs</a></li>
                 <li><a href="#settings">Settings and Customization</a></li>
@@ -35,32 +35,34 @@
                 This add-on uses the <strong>Merriam-Webster Dictionary API</strong> because it offers a generous free plan of <strong>1,000 requests per day</strong>. This ensures the add-on can remain free and reliable for all users. As a non-profit project, using a service that does not require payment was a key consideration during the add-on's design phases.
             </p>
         </section>
-<section id="v1.1update">
-    <h2>v1.1: What's New</h2>
+<section id="v1.3update">
+    <h2>v1.3: What's New</h2>
     <p>
         This update introduces important stability fixes and improvements that make the add-on more reliable and easier to use.
     </p>
-
-    <h3>1. More Stable Play Button in the Definition Dialog</h3>
+    <h3>1. New Layer-Based Shortcut System</h3>
     <p>
-        The Play button in the "Copy and Show Dialog" mode has been fully fixed. 
-        Previously, the button sometimes failed to appear, which made it impossible to listen to the pronunciation directly from the dialog. 
-        This issue is now resolved, and the button appears consistently every time, making pronunciation playback smoother and more dependable.
-    </p>
-
-    <h3>2. Major Improvements to Text Selection Handling</h3>
-    <p>
-        Text selection is now handled much more accurately across different applications.  
-        The add-on can now correctly detect selected words in editors like Notepad and WordPad, and it also works better inside bulleted and numbered lists.  
-        This fix solves a long-standing issue where the add-on sometimes ignored the selected word or picked an incomplete part of it.
-    </p>
-
-    <h3>3. New Layer-Based Shortcut System</h3>
-    <p>
-        Instead of using many global shortcuts that could conflict with other programs, version 1.1 introduces a cleaner and safer shortcut system.  
+        Instead of using many global shortcuts that may conflict with other programs, version 1.3 introduces a cleaner and safer shortcut system.  
         Now, you only need to press <code>Control+Shift+D</code> to enter the add-on’s <strong>main layer</strong>.  
         After entering this layer, you simply press a single letter (such as <code>a</code>, <code>d</code>, <code>t</code>, etc.) to perform the desired action.  
         This design keeps your keyboard clean, avoids shortcut conflicts, and makes the add-on easier to remember and use.
+    </p>
+
+    <h3>2. More Stable Play Button in the Definition Dialog</h3>
+    <p>
+        The Play button in the "Copy and Show Dialog" mode has been fully fixed. 
+        Previously, the button sometimes failed to appear, which made it impossible to listen to the pronunciation directly from the dialog. 
+        This issue is now resolved, and the button appears consistently every time, making pronunciation playback smoother and more dependable. Furthermore, to further enhance stability and streamline your workflow, you can now listen to the pronunciation of the word under your cursor immediately without needing to open the definition dialog at all; you can simply do it by pressing <code>P</code> inside the main layer. Note that this direct playback shortcut automatically depends on the same speed and volume settings currently configured within the Definition Dialog.
+    </p>
+
+    <h3>3. Major Improvements to Text Selection Handling</h3>
+    <p>
+        Text interaction is now faster and more intuitive. You are no longer required to manually highlight a word to look it up. Simply place your cursor at the beginning of the desired word, and the add-on will automatically detect it when you request a definition, pronunciation, synonyms, or antonyms. Furthermore,        text selection is now handled much more accurately across different applications; the add-on can now correctly detect selected words in editors like Notepad and WordPad, and it also works better inside bulleted and numbered lists. This fix solves a long-standing issue where the add-on sometimes ignored the selected word or picked an incomplete part of it.
+    </p>
+
+    <h3>4. Comprehensive Sound Scheme</h3>
+    <p>
+        The add-on introduces a comprehensive sound scheme to enhance interaction. While general sound effects such as those are related to search results and dialog navigation can be toggled on or off from the add-on's dedicated settings dialog within the NVDA settings panel, the specified sound effects for opening and closing the add-on's main layer are designed to function independently. This ensures you always receive audible confirmation of the layer's status, regardless of your general sound effects preferences.
     </p>
 </section>
 
@@ -110,14 +112,14 @@
 
             <h3>The Manual Search Dialog</h3>
             <p>
-                You can open it by pressing <code>NVDA+Alt+A</code>, this is ideal for words you want to type and search for manually.
+                You can open this dialog by entering the main layer (<code>Ctrl+Shift+D</code>) and then pressing <code>S</code>. This is ideal for words you want to type and search for manually. Once you type your query and press <strong>Enter</strong>, the search begins. As soon as the word is found, the focus automatically moves to the results area so you can start reading immediately. In case you are enabling the sound effects option from the add-on's settings dialog, a success sound will play to confirm that the result is successfully found.
             </p>
             <ul>
                 <li>
                     <strong>Flexible Search Types:</strong> It contains a combo box that allows you to specify what you are looking for: a <strong>definition</strong>, <strong>synonyms</strong>, or <strong>antonyms</strong>.
                 </li>
                 <li>
-                    <strong>Smart Auto-Search:</strong> This dialog has a convenient, time-saving feature. If you select text in the current open window before pressing <code>NVDA+Alt+A</code>, the dialog will automatically perform a search for that text the moment it opens. It then intelligently moves the focus directly to the results area, allowing you to start reading the information immediately without any extra steps.
+                    <strong>Smart Auto-Search:</strong> This dialog has a convenient, time-saving feature. If you select text in the current open window before pressing <code>S</code> after opening the add-on's main layer, the dialog will automatically perform a search for that text the moment it opens. It then intelligently moves the focus directly to the results area, allowing you to start reading the information immediately without any extra steps.
                 </li>
             </ul>
         </section>
@@ -128,8 +130,9 @@
                 To customize the add-on, go to the NVDA menu, then <strong>Preferences -> Settings -> MW Word Lexicon</strong> category.
             </p>
             <ul>
+                <li><strong>Enable Sound Effects:</strong> Toggles the add-on's sound feedback (audible cues for layer operations, dialog interactions, and errors) on or off according to your preference.</li>
                 <li><strong>History size:</strong> Sets the maximum number of lookups you want to store in the history.</li>
-                <li><strong>Cycle through history directly:</strong> Changes the behavior of the history shortcut (<code>Control+Shift+H</code>). When checked, each press cycles to the next history item and copies it automatically. When unchecked, it opens the history management dialog.</li>
+                <li><strong>Cycle through history directly:</strong> Changes the behavior of the history shortcut within the add-on's main layer (<code>H</code>). When checked, each press cycles to the next history item and copies it automatically. When unchecked, it opens the history management dialog.</li>
                 <li><strong>History retention period:</strong> Automatically deletes history items periodically at the specified time. For example, you can set it to keep items for only 7 days. If you wish to keep your history indefinitely, simply set its value to 0.</li>
             </ul>
         </section>
@@ -139,9 +142,10 @@
             
             <h3>General Shortcuts</h3>
            <p>
-    To use the add-on general shortcuts, you must first press <code>Control+Shift+D</code> to enter the add-on’s main layer.  
-    While inside this layer, press a single letter to perform an action such as getting a definition, showing synonyms, getting the Word of the Day, cycling history, and more.  
-    This system reduces shortcut conflicts with other applications and keeps the keyboard layout simple and organized.
+    To use the add-on general shortcuts, you must first press <code>Control+Shift+D</code> to enter the add-on’s main layer. While you are inside this layer, press a single letter to perform an action such as getting a definition, showing synonyms, getting the Word of the Day, cycling history, and more. This system reduces shortcut conflicts with other applications and keeps the keyboard layout simple and organized.
+</p>
+<p>
+To ensure a fluid workflow, the add-on's main layer is designed to stay open during repetitive tasks. To demonstrate, when you press <code>A</code> to cycle through output modes, the layer remains active for <strong>1.5 seconds</strong>, allowing you to switch modes rapidly without re-entering the layer. Similarly, if "Cycle through history" option is enabled through settings dialog, pressing <code>H</code> keeps the layer open for <strong>2 seconds</strong>, enabling you to browse and copy your history items quickly in succession.
 </p>
             <table>
                 <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
@@ -151,9 +155,11 @@
                     <tr><td><code>T</code></td><td>Get synonyms for the selected word in the window.</td></tr>
                     <tr><td><code>U</code></td><td>Get antonyms for the selected word in the window.</td></tr>
                     <tr><td><code>W</code></td><td>Get the Word of the Day.</td></tr>
+                    <tr><td><code>P</code></td><td>Listen to the pronunciation of the word that is under your cursor directly.</td></tr>
                     <tr><td><code>H</code></td><td>Show or cycle through history, depending on your preferred settings.</td></tr>
-                    <tr><td><code>A</code></td><td>Switch between the three "display/show" output modes.</td></tr>
+                    <tr><td><code>A</code></td><td>Switch between the three display output modes.</td></tr>
                     <tr><td><code>S</code></td><td>Open the manual search dialog.</td></tr>
+                    <tr><td><code>F1</code></td><td>Open the Add-on's User Guide in your browser.</td></tr>
                 </tbody>
             </table>
 
@@ -173,7 +179,7 @@
                 <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
                 <tbody>
                     <tr><td><code>Ctrl+C</code></td><td>Copy the currently focused history item.</td></tr>
-                    <tr><td><code>Ctrl+Shift+C</code></td><td>Copy all history items.</td></tr>
+                    <tr><td><code>Alt+Shift+C</code></td><td>Copy all history items.</td></tr>
                     <tr><td><code>Delete</code></td><td>Remove the currently focused history item.</td></tr>
                     <tr><td><code>Shift+Delete</code></td><td>Clear the entire history.</td></tr>
                     <tr><td><code>Escape</code></td><td>Close the dialog.</td></tr>
@@ -184,8 +190,9 @@
         <section id="important-notes">
             <h2>Important Notes</h2>
             <ul>
-                <li><strong>One Dialog at a Time:</strong> You must close any open add-on dialog before opening another to ensure smooth operation. If you try to open more than one dialog at the same time, the add-on will show an error message alerting you that there is an active dialog, and you cannot open any other dialog until the active one is closed first.</li>
-                <li><strong>Double-Press to Copy Mode:</strong> In "Display/Show Dialog" modes, pressing a lookup shortcut twice quickly copies the last result.</li>
+                <li><strong>One Dialog at a Time:</strong> You must close any open add-on dialog before opening another to ensure smooth operation. If you try to open more than one dialog at the same time, the add-on will show an error message alerting you that there is an active dialog, and you cannot open any other dialog until the active one is closed first. Additionally, if sound effects option is enabled in the settings, a distinct error sound will accompany this warning.</li>
+                <li>
+    <strong>Double-Press Mode Logic:</strong> When this mode is active, the layer remains open briefly after you request a definition, synonym, or antonym. This deliberate pause gives you a sufficient space to press the shortcut key a second time to be able to copy the output immediately.</li>
                 <li><strong>Internet Connection:</strong> An active internet connection is required for all lookups.</li>
             </ul>
         </section>
