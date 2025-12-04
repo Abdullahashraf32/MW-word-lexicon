@@ -28,6 +28,7 @@ from . import thesaurus
 import json
 import threading
 import textInfos
+import nvwave
 
 # Get the directory of the current addon.
 addon_dir = os.path.dirname(__file__)
@@ -44,7 +45,6 @@ except Exception:
     import selection_helper
   except Exception:
     selection_helper = None
-import tones
 
 # Global variable to track any currently open dialog created by this addon.
 OPEN_DIALOG = None
@@ -122,6 +122,89 @@ def _call_selection_helper_foreground(out_container):
       out_container.append(res)
   except Exception:
     out_container.append(None)
+
+def play_sfx(filename):
+  """
+  Play a sound effect if enabled in settings.
+  Runs in a separate thread to prevent UI freezing.
+  """
+  def _worker():
+    try:
+      val = config.conf["mwWordLexicon"].get("enable_sounds", False)
+      if isinstance(val, str):
+        is_enabled = val.lower() == "true"
+      else:
+        is_enabled = bool(val)
+
+      if is_enabled:
+        path = os.path.join(addon_dir, "sounds", filename)
+        if os.path.exists(path):
+          nvwave.playWaveFile(path)
+    except Exception:
+      pass
+  
+  t = threading.Thread(target=_worker)
+  t.daemon = True
+  t.start()
+
+def play_layer_sound(filename):
+  """
+  Play a mandatory layer sound.
+  Runs in a separate thread to prevent UI freezing.
+  """
+  def _worker():
+    try:
+      path = os.path.join(addon_dir, "sounds", filename)
+      if os.path.exists(path):
+        nvwave.playWaveFile(path)
+    except Exception:
+      pass
+
+  t = threading.Thread(target=_worker)
+  t.daemon = True
+  t.start()
+
+def _bind_dialog_common_sounds(frame, context="generic"):
+  play_sfx("dialogopen.wav")
+  
+  def _on_close_sfx(evt):
+    play_sfx("dialogclose.wav")
+    evt.Skip()
+  
+  frame.Bind(wx.EVT_CLOSE, _on_close_sfx)
+
+  def _on_char_hook_sfx(evt):
+    kc = evt.GetKeyCode()
+    
+    # Priority 1: Tab navigation
+    if kc == wx.WXK_TAB:
+      play_sfx("tabmove.wav")
+      evt.Skip()
+      return
+
+    # Get the currently focused control
+    focus = wx.Window.FindFocus()
+
+    # Priority 2: Context specific overrides
+  
+    # History: Let the ListBox handler manage Up/Down/Left/Right (for tick.wav)
+    if context == "history" and isinstance(focus, wx.ListBox) and kc in (wx.WXK_UP, wx.WXK_DOWN, wx.WXK_LEFT, wx.WXK_RIGHT):
+      evt.Skip()
+      return
+
+    # Definition/Search Results: Disable 'click.wav' in ReadOnly TextCtrls (navigation/reading)
+    if isinstance(focus, wx.TextCtrl) and focus.HasFlag(wx.TE_READONLY):
+      # Skip event to allow standard navigation (reading), but do NOT play click sound
+      evt.Skip()
+      return
+
+    # Priority 3: Generic Click (for other navigation/typing keys)
+    if kc not in (wx.WXK_SHIFT, wx.WXK_CONTROL, wx.WXK_ALT, wx.WXK_COMMAND):
+       play_sfx("click.wav")
+    
+    evt.Skip()
+
+  frame.Bind(wx.EVT_CHAR_HOOK, _on_char_hook_sfx)
 
 DICTIONARY_API_URL = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/?word={}"
 
@@ -375,12 +458,14 @@ def get_valid_selected_word():
   # 2) Fallback: previous generic selection then normalization
   selected = get_selected_text()
   if not selected:
-    ui.message("No text selected.")
+    ui.message("No selection")
+    play_sfx("noselection.wav")
     return None
 
   word = normalize_selected_word(selected)
   if not word:
-    ui.message("Please select a single English word.")
+    ui.message("No selection.")
+    play_sfx("noselection.wav")
     return None
 
   return word
@@ -428,24 +513,27 @@ def _prune_history_by_retention(history_list):
   return [item for item in history_list if item.get("ts", 0) >= cutoff]
 
 class SearchDialog(wx.Frame):
-  """
-  Lightweight search frame for manual lookup (definitions, synonyms, antonyms).
-  Uses background threads for network operations and updates UI via wx.CallAfter.
-  """
   def __init__(self, parent, plugin, pre_filled_text=""):
     global OPEN_DIALOG
     if OPEN_DIALOG:
       ui.message("Please close the open dialog before opening another.")
+      play_sfx("error.wav")
       raise RuntimeError("Dialog already open")
     super(SearchDialog, self).__init__(parent, title="Search Dictionary", size=(600, 450))
     OPEN_DIALOG = self
     self.plugin = plugin
+    
+    _bind_dialog_common_sounds(self, context="search")
+
     panel = wx.Panel(self)
 
     main_sizer = wx.BoxSizer(wx.VERTICAL)
     search_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
     self.search_box = wx.TextCtrl(panel, value=pre_filled_text)
+    
+    self.search_box.Bind(wx.EVT_SET_FOCUS, lambda evt: (play_sfx("searchbox].wav"), evt.Skip()))
+    
     search_sizer.Add(self.search_box, 1, wx.EXPAND | wx.ALL, 5)
 
     self.search_type = wx.ComboBox(panel, choices=["definition", "synonyms", "antonyms"], style=wx.CB_READONLY)
@@ -465,24 +553,23 @@ class SearchDialog(wx.Frame):
 
     panel.SetSizer(main_sizer)
 
-    # Bind events
-    search_button.Bind(wx.EVT_BUTTON, self.on_search)
+    search_button.Bind(wx.EVT_BUTTON, lambda evt: self.on_search(evt, manual=True))
     close_button.Bind(wx.EVT_BUTTON, lambda evt: self._do_close())
     self.search_box.Bind(wx.EVT_KEY_UP, self.on_key_up)
+    
     self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
-    self.Bind(wx.EVT_CLOSE, self._on_close)
-
+    
     self._auto_focus_results_after_search = bool(pre_filled_text)
 
     if pre_filled_text:
       wx.CallAfter(self.search_box.SetFocus)
-      wx.CallLater(80, self.on_search, None)
+      wx.CallLater(80, self.on_search, None, manual=False)
 
   def _on_char_hook(self, evt):
     if evt.GetKeyCode() == wx.WXK_ESCAPE:
       self._do_close()
-    else:
-      evt.Skip()
+      return
+    evt.Skip()
 
   def _do_close(self):
     global OPEN_DIALOG
@@ -492,22 +579,15 @@ class SearchDialog(wx.Frame):
       pass
     OPEN_DIALOG = None
 
-  def _on_close(self, evt):
-    global OPEN_DIALOG
-    OPEN_DIALOG = None
-    try:
-      evt.Skip()
-    except Exception:
-      pass
-
   def on_key_up(self, event):
     if event.GetKeyCode() == wx.WXK_RETURN:
-      self.on_search(None)
+      self.on_search(None, manual=True)
     event.Skip()
 
-  def on_search(self, event):
+  def on_search(self, event, manual=False):
     query = self.search_box.GetValue().strip()
     if not query:
+      play_sfx("noselection.wav")
       return
 
     search_type = self.search_type.GetValue()
@@ -524,19 +604,31 @@ class SearchDialog(wx.Frame):
           result = thesaurus.get_word_antonyms(query)
       except Exception as e:
         result = f"An error occurred: {e}"
+      
       final_result = result or "Not found."
+      
+      is_error = "Not found" in final_result or "Error" in final_result or "Failed" in final_result
+      
+      if is_error:
+         wx.CallAfter(play_sfx, "error.wav")
+      elif manual: 
+         wx.CallAfter(play_sfx, "success.wav")
 
       def on_complete():
         self.results_area.SetValue(final_result)
-        if search_type == "definition":
+        if search_type == "definition" and not is_error:
           wx.CallAfter(api.copyToClip, final_result)
           wx.CallAfter(self.plugin._addToHistory, final_result)
-        if self._auto_focus_results_after_search:
+        
+        if not is_error:
           try:
             self.results_area.SetFocus()
-            self._auto_focus_results_after_search = False
           except Exception:
             pass
+
+        if self._auto_focus_results_after_search:
+          self._auto_focus_results_after_search = False
+          
       wx.CallAfter(on_complete)
 
     thread = threading.Thread(target=worker)
@@ -545,8 +637,9 @@ class SearchDialog(wx.Frame):
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
   """
-  Main addon class. This class is defensive: background work is threaded,
-  and settings panel registration/unregistration is defensive.
+  Main addon class.
+  Optimized: Initialization is lazy. Heavy tasks (JSON parsing, threads) 
+  only start upon the first user interaction, preventing NVDA startup freeze.
   """
   history = []
   historyIndex = -1
@@ -563,13 +656,51 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self._layer_waiting_double_press = False
     self._layer_hold_started = 0
     self._layer_hold_timer = None
+    
+    # Flag to track if we have performed the heavy loading yet.
+    self._resources_loaded = False
+    
+    # Basic config reading (Fast)
     ensure_config_section(SECTION)
     try:
       self.history_size = int(config.conf["mwWordLexicon"].get("history_size", 3))
     except Exception:
       self.history_size = 3
+    
+    self.copy_mode = int(config.conf["mwWordLexicon"].get("copy_mode", 1))
+    self.cycle_history = str(config.conf["mwWordLexicon"].get("cycle_history", False)).lower() == 'true'
+    self.last_copy_mode2_press_time = None
+    self.last_thesaurus_press_time = None
+    self.last_thesaurus_text = None
+    self.last_antonyms_press_time = None
+    self.last_antonyms_text = None
 
-    # Load history stored as JSON string.
+    # Initialize threading variables but DO NOT start them yet.
+    self._retention_stop_event = threading.Event()
+    self._retention_thread = None
+
+    # Defensive registration of the settings panel.
+    try:
+      cls_list = getattr(gui.settingsDialogs.NVDASettingsDialog, "categoryClasses", None)
+      if cls_list is None:
+        gui.settingsDialogs.NVDASettingsDialog.categoryClasses = [MwWordLexiconSettingsPanel]
+      else:
+        if MwWordLexiconSettingsPanel not in cls_list:
+          cls_list.append(MwWordLexiconSettingsPanel)
+    except Exception:
+      pass
+
+  def _ensure_resources_loaded(self):
+    """
+    Perform heavy initialization (JSON parsing, thread starting) only when needed.
+    This prevents blocking NVDA startup.
+    """
+    if self._resources_loaded:
+      return
+    
+    self._resources_loaded = True
+    
+    # 1. Load History (Potentially heavy I/O)
     hist_json = config.conf["mwWordLexicon"].get("history_json", "[]")
     try:
       parsed = json.loads(hist_json)
@@ -585,40 +716,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         GlobalPlugin.history = []
     except Exception:
       GlobalPlugin.history = []
+    
     GlobalPlugin.historyIndex = -1
     GlobalPlugin.restoring = False
-    self.copy_mode = int(config.conf["mwWordLexicon"].get("copy_mode", 1))
-    self.cycle_history = str(config.conf["mwWordLexicon"].get("cycle_history", False)).lower() == 'true'
-    self.last_copy_mode2_press_time = None
-    self.last_thesaurus_press_time = None
-    self.last_thesaurus_text = None
-    self.last_antonyms_press_time = None
-    self.last_antonyms_text = None
 
-    # defer starting the retention worker slightly to avoid blocking NVDA startup
-    self._retention_stop_event = threading.Event()
-    self._retention_thread = None
+    # 2. Start Retention Thread
     try:
-      # start the thread after 1 second (main GUI thread scheduling)
-      wx.CallLater(1000, lambda: self._start_retention_thread())
+      self._start_retention_thread()
     except Exception:
-      # fallback: start immediately if CallLater unavailable
-      try:
-        self._start_retention_thread()
-      except Exception:
-        pass
-
-    # Defensive registration of the settings panel. Append only if not present.
-    try:
-      cls_list = getattr(gui.settingsDialogs.NVDASettingsDialog, "categoryClasses", None)
-      if cls_list is None:
-        # Defensive: create the list if it does not exist.
-        gui.settingsDialogs.NVDASettingsDialog.categoryClasses = [MwWordLexiconSettingsPanel]
-      else:
-        if MwWordLexiconSettingsPanel not in cls_list:
-          cls_list.append(MwWordLexiconSettingsPanel)
-    except Exception:
-      # Never let registration errors crash NVDA startup.
       pass
 
   def _release_hold_if_expired(self):
@@ -643,19 +748,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       pass
 
   def getScript(self, gesture):
-    # If we're not currently inside the layer mode, return the normal script resolution.
     if not self.toggling:
       return super().getScript(gesture)
 
-    # Try retrieving the script normally from NVDA.
     script = super().getScript(gesture)
     if not script:
-      # If the gesture has no matching script, keep the original error behavior.
-      return finally_(self.script_error, self.finish)
+      # Keep sound on error or let script_error handle it (script_error calls play_sfx("error.wav"))
+      return finally_(self.script_error, lambda: self.finish(silent=True))
 
-    # Scripts that support double-press inside the layer.
-    # These scripts must not be wrapped with "finish", otherwise the layer closes
-    # before the second press is detected.
     double_press_layer_cmds = {
       "script_get_definition_with_smart_copy",
       "script_get_thesaurus",
@@ -663,8 +763,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       "script_word_of_the_day",
     }
 
-    # If copy mode is double-press mode (mode 1) and this script is one of the
-    # double-press scripts, return it as-is so that the layer stays active.
     if self.copy_mode == 1:
       try:
         name = getattr(script, "__name__", "")
@@ -673,15 +771,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       if name in double_press_layer_cmds:
         return script
 
-    # Special handling for specific keys like 'h' (history) or 'a' (cycle mode):
-    # Read the current cycle_history setting directly from config so we react
-    # immediately to changes in settings panel (don't rely on self.cycle_history).
     try:
       sname = getattr(script, "__name__", "")
     except Exception:
       sname = ""
 
-    # Allow cycle mode script to handle its own closing (via timer)
     if sname == "script_cycle_copy_mode":
       return script
 
@@ -696,25 +790,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       except Exception:
         cycle_enabled = getattr(self, "cycle_history", False)
 
-      # If cycle_history is enabled in config, return the script unwrapped
-      # so 'h' keeps the layer open and cycles items.
       if cycle_enabled:
         return script
 
-      # If cycle_history is disabled, do NOT return here — let default wrapping
-      # apply so the layer will be closed after the script runs.
-      # Note: script_show_history_list will itself call self.finish() before
-      # opening the dialog; wrapping is an extra safety to ensure the layer stops.
-
-    # If we're already waiting for the second press, do not wrap the script either.
-    # This keeps the layer open until the script itself decides to close it.
     if self._layer_waiting_double_press and self.copy_mode == 1:
       return script
 
-    # Otherwise, wrap the script so that the layer closes after execution (default behavior).
-    return finally_(script, self.finish)
+    return finally_(script, lambda: self.finish(silent=True))
 
-  def finish(self):
+  def finish(self, silent=False):
+    # Play close sound only if the layer was actually active AND silent is False
+    if self.toggling and not silent:
+      play_layer_sound("layerclose.wav")
+      
     self.toggling = False
     try:
       self.clearGestureBindings()
@@ -723,15 +811,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       pass
 
   def script_error(self, gesture):
-    try:
-      tones.beep(120, 100)
-    except Exception:
-      pass
+    play_layer_sound("layerclose.wav")
 
   def _updateAndSaveHistory(self, new_history, prune=True):
+    # Ensure loaded before trying to save updates
+    self._ensure_resources_loaded()
+    
     """
     Normalize, prune, cap and save history into config as JSON string.
     """
+    # Fix: Define was_empty status before processing to compare later
+    was_empty = (len(GlobalPlugin.history) == 0)
+
     normalized = []
     now = time.time()
     for item in new_history:
@@ -741,6 +832,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         normalized.append({"text": item, "ts": now})
     if prune:
       normalized = _prune_history_by_retention(normalized)
+
+    # Check for retention prune sound
+    if not was_empty and len(normalized) == 0:
+      play_sfx("historyremove.wav")
+
     try:
       max_size = int(config.conf["mwWordLexicon"].get("history_size", getattr(self, "history_size", 3)))
     except Exception:
@@ -765,9 +861,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       pass
 
   def _addToHistory(self, text):
-    """
-    Add a text item to history; normalize and persist.
-    """
+    self._ensure_resources_loaded()
     if not text:
       return
     now = time.time()
@@ -802,8 +896,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       self._retention_thread = threading.Thread(target=self._retention_worker)
       self._retention_thread.daemon = True
       self._retention_thread.start()
-      # run one prune check asynchronously to avoid blocking main thread
-      wx.CallLater(50, self._periodic_prune_check)
     except Exception:
       pass
 
@@ -838,16 +930,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     global OPEN_DIALOG
     if OPEN_DIALOG:
       ui.message("Please close the open dialog before opening another.")
+      play_sfx("error.wav")
       return
     frame = wx.Frame(None, title="Definition", size=(600, 400))
     OPEN_DIALOG = frame
+    
+    # Bind Common Sounds
+    _bind_dialog_common_sounds(frame, context="definition")
+
     panel = wx.Panel(frame)
     sizer = wx.BoxSizer(wx.VERTICAL)
 
     text_ctrl = wx.TextCtrl(panel, value=text, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
     sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
 
-    # Load persistent audio settings
     try:
       conf = config.conf["mwWordLexicon"]
       init_speed = int(conf.get("audio_speed", 100))
@@ -868,7 +964,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     volume_slider = wx.Slider(panel, value=init_vol, minValue=0, maxValue=100, style=wx.SL_HORIZONTAL)
     sizer.Add(volume_slider, 0, wx.EXPAND | wx.ALL, 10)
 
-    # Helper to save settings on change
     def _save_audio_settings(evt=None):
       try:
         config.conf["mwWordLexicon"]["audio_speed"] = speed_slider.GetValue()
@@ -957,12 +1052,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     frame.Raise()
 
   def handle_output(self, text):
-    """
-    Handle result according to copy_mode.
-    Mode 0: copy+history+message
-    Mode 1: message only
-    Mode 2: copy+history+dialog with audio controls
-    """
+    # Ensure initialized before writing history
+    self._ensure_resources_loaded()
+    
     if self.copy_mode == 0:
       api.copyToClip(text)
       self._addToHistory(text)
@@ -988,10 +1080,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       self.last_definition_text = text
 
   def terminate(self):
-    """
-    Cleanly stop background threads and unregister the settings panel.
-    Remove all occurrences of the panel class from NVDA's categoryClasses.
-    """
     try:
       self._stop_retention_thread()
     except Exception:
@@ -1010,6 +1098,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     """
     Generic helper to run a function in a background thread then call handle_output on main thread.
     """
+    # Ensure initialized before running logic
+    self._ensure_resources_loaded()
+    
     def worker():
       result = target_func(*args)
       def on_complete():
@@ -1017,6 +1108,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           self.handle_output(result)
         else:
           ui.message("Not found.")
+          play_sfx("error.wav")
       wx.CallAfter(on_complete)
     thread = threading.Thread(target=worker)
     thread.daemon = True
@@ -1032,10 +1124,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       return
     self.bindGestures(self.__LayerGestures)
     self.toggling = True
-    try:
-      tones.beep(100, 10)
-    except Exception:
-      pass
+    play_layer_sound("layeropen.wav")
 
   __LayerGestures = {
     "kb:a": "cycle_copy_mode",
@@ -1076,6 +1165,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     description="Pronounce the selected word using settings from definition dialog",
   )
   def script_pronounce_selected_word(self, gesture):
+    self._ensure_resources_loaded()
+    
     # Try to use the word from the last lookup if available (e.g. after pressing 'd'), 
     # otherwise fetch selection.
     word = getattr(self, "last_selected_word", None) or get_valid_selected_word()
@@ -1113,6 +1204,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       description="Open Search Dialog", 
       )
   def script_showSearchDialog(self, gesture):
+    self._ensure_resources_loaded()
+    
     global OPEN_DIALOG
     if OPEN_DIALOG:
       ui.message("Please close the open dialog before opening another.")
@@ -1131,6 +1224,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       description="Get word definition or copy last one if pressed quickly twice.", 
       )
   def script_get_definition_with_smart_copy(self, gesture):
+    self._ensure_resources_loaded()
+    
     now = time.time()
     if self.copy_mode in (1, 2):
       label = "Definition"
@@ -1172,6 +1267,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       description="Get Word of the Day with examples or copy them on quick second press.", 
       )
   def script_word_of_the_day(self, gesture):
+    self._ensure_resources_loaded()
+    
     now = time.time()
     if self.copy_mode == 1:
       status = handle_double_press(self.last_wotd_press_time, now, self.word_of_the_day_text, "Word of the Day")
@@ -1226,10 +1323,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
   @script(
     description="Show or cycle through history", 
-)
+  )
   def script_show_history_list(self, gesture):
-    # Read the current cycle_history setting directly from config to ensure
-    # immediate effect after saving settings (no need to rely on self.cycle_history).
+    self._ensure_resources_loaded()
+    
+    # Read the current cycle_history setting directly from config
     try:
       sec = ensure_config_section(SECTION)
       cv = sec.get("cycle_history", False)
@@ -1242,15 +1340,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     if not GlobalPlugin.history:
       ui.message("No history available.")
-      # Ensure layer closes if there is nothing to show
+      play_sfx("error.wav") # Error SFX for empty history
       self.finish()
       return
 
     if cycle_enabled:
-      # Cycle mode: move index, copy the current item and keep the layer active.
-      # Reset the auto-close timer to 2 seconds on each press to allow smooth cycling.
       self._schedule_layer_close(2000)
-
       try:
         GlobalPlugin.historyIndex = (GlobalPlugin.historyIndex + 1) % len(GlobalPlugin.history)
         reversed_history = list(reversed([h.get("text") for h in GlobalPlugin.history]))
@@ -1264,15 +1359,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         ui.message("History cycle error.")
       return
 
-    # Fallback: open the full history dialog (original behaviour)
+    # Fallback: open the full history dialog
     try:
       global OPEN_DIALOG
       if OPEN_DIALOG:
         ui.message("Please close the open dialog before opening another.")
+        play_sfx("error.wav")
         return
 
-      # Close the layer immediately before opening the dialog so the layer
-      # does not remain active while the dialog is shown.
       try:
         self.finish()
       except Exception:
@@ -1280,6 +1374,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
       frame = wx.Frame(None, title="mwWordLexicon — History", size=(700, 400))
       OPEN_DIALOG = frame
+      _bind_dialog_common_sounds(frame, context="history")
       panel = wx.Panel(frame)
       sizer = wx.BoxSizer(wx.VERTICAL)
       lbl = wx.StaticText(panel, label="Right-click for options or use keyboard shortcuts:")
@@ -1289,39 +1384,123 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
       sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
 
+      # Sound: Listbox Tick (Up/Down/Left/Right) with Boundary Check (End Sound)
+      def _on_list_key(evt):
+        kc = evt.GetKeyCode()
+        if kc in (wx.WXK_UP, wx.WXK_DOWN, wx.WXK_LEFT, wx.WXK_RIGHT):
+          sel = lb.GetSelection()
+          count = lb.GetCount()
+          
+          if kc in (wx.WXK_UP, wx.WXK_LEFT):
+            if sel == 0:
+              play_sfx("end.wav")
+              return # Consume event
+            else:
+              play_sfx("tick.wav")
+          elif kc in (wx.WXK_DOWN, wx.WXK_RIGHT):
+            if sel == count - 1:
+              play_sfx("end.wav")
+              return # Consume event
+            else:
+              play_sfx("tick.wav")
+        evt.Skip()
+
+      lb.Bind(wx.EVT_KEY_DOWN, _on_list_key)
+      
+      def _on_menu_highlight(evt):
+        play_sfx("tick.wav")
+        evt.Skip()
+      frame.Bind(wx.EVT_MENU_HIGHLIGHT, _on_menu_highlight)
+
       close_btn = wx.Button(panel, label="Close")
       sizer.Add(close_btn, 0, wx.ALIGN_CENTER | wx.ALL, 8)
 
       def do_copy_selected(event=None):
-        sel = lb.GetSelection(); text = lb.GetString(sel)
-        api.copyToClip(text); ui.message("History item copied.")
+        sel = lb.GetSelection()
+        if sel != wx.NOT_FOUND:
+            text = lb.GetString(sel)
+            api.copyToClip(text)
+            ui.message("History item copied.")
+      
       def do_copy_all(event=None):
-        all_items = "\n\n".join(lb.GetItems())
-        api.copyToClip(all_items); ui.message("All history items copied.")
+        items = lb.GetItems()
+        if items:
+            all_items = "\n\n".join(items)
+            api.copyToClip(all_items)
+            ui.message("All history items copied.")
+            play_sfx("copyall.wav")
+        else:
+            ui.message("History is empty.")
+
       def do_remove_selected(event=None):
         sel = lb.GetSelection(); original_index = len(GlobalPlugin.history) - 1 - sel
         GlobalPlugin.history.pop(original_index); self._updateAndSaveHistory(GlobalPlugin.history)
         lb.Delete(sel); ui.message("Item removed.")
         if lb.GetCount() > 0: lb.SetSelection(min(sel, lb.GetCount() - 1))
+        else: play_sfx("historyremove.wav")
+      
       def do_clear_history(event=None):
         dialog = wx.MessageDialog(frame, "Are you sure?", "Confirm Clear", wx.YES_NO | wx.ICON_WARNING)
+        play_sfx("dialogopen.wav")
         if dialog.ShowModal() == wx.ID_YES:
-          self._updateAndSaveHistory([]); lb.Clear(); ui.message("History cleared."); frame.Close()
+          self._updateAndSaveHistory([]); lb.Clear(); ui.message("History cleared."); 
+          play_sfx("historyremove.wav")
+          frame.Close()
+        else:
+          play_sfx("dialogclose.wav")
         dialog.Destroy()
 
       ID_COPY, ID_COPY_ALL, ID_REMOVE, ID_CLEAR = wx.NewIdRef(), wx.NewIdRef(), wx.NewIdRef(), wx.NewIdRef()
       def on_context_menu(event):
-        menu = wx.Menu(); menu.Append(ID_COPY, "Copy\tCtrl+C"); menu.Append(ID_COPY_ALL, "Copy All\tCtrl+Shift+C")
-        menu.AppendSeparator(); menu.Append(ID_REMOVE, "Remove\tDelete"); menu.Append(ID_CLEAR, "Clear\tShift+Delete")
-        frame.PopupMenu(menu); menu.Destroy()
+        play_sfx("popupon.wav")
+        menu = wx.Menu()
+        menu.Append(ID_COPY, "Copy\tCtrl+C")
+        menu.Append(ID_COPY_ALL, "Copy All\tAlt+Shift+C")
+        menu.AppendSeparator()
+        menu.Append(ID_REMOVE, "Remove\tDelete")
+        menu.Append(ID_CLEAR, "Clear\tShift+Delete")
+        
+        menu.Bind(wx.EVT_MENU, do_copy_selected, id=ID_COPY)
+        menu.Bind(wx.EVT_MENU, do_copy_all, id=ID_COPY_ALL)
+        menu.Bind(wx.EVT_MENU, do_remove_selected, id=ID_REMOVE)
+        menu.Bind(wx.EVT_MENU, do_clear_history, id=ID_CLEAR)
+        
+        frame.PopupMenu(menu)
+        menu.Destroy()
+        play_sfx("popupoff.wav")
 
       lb.Bind(wx.EVT_CONTEXT_MENU, on_context_menu)
-      frame.Bind(wx.EVT_MENU, do_copy_selected, id=ID_COPY); frame.Bind(wx.EVT_MENU, do_copy_all, id=ID_COPY_ALL)
-      frame.Bind(wx.EVT_MENU, do_remove_selected, id=ID_REMOVE); frame.Bind(wx.EVT_MENU, do_clear_history, id=ID_CLEAR)
+      
+      frame.Bind(wx.EVT_MENU, do_copy_selected, id=ID_COPY)
+      frame.Bind(wx.EVT_MENU, do_copy_all, id=ID_COPY_ALL)
+      frame.Bind(wx.EVT_MENU, do_remove_selected, id=ID_REMOVE)
+      frame.Bind(wx.EVT_MENU, do_clear_history, id=ID_CLEAR)
+      
       close_btn.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
-      accel_tbl = wx.AcceleratorTable([(wx.ACCEL_CTRL, ord('C'), ID_COPY), (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord('C'), ID_COPY_ALL), (wx.ACCEL_NORMAL, wx.WXK_DELETE, ID_REMOVE), (wx.ACCEL_SHIFT, wx.WXK_DELETE, ID_CLEAR)])
+      
+      # Simplified Accelerator Table: Only standard keys here.
+      # We handle Alt+Shift+C manually in CharHook to suppress the click sound.
+      accel_tbl = wx.AcceleratorTable([
+        (wx.ACCEL_CTRL, ord('C'), ID_COPY), 
+        (wx.ACCEL_NORMAL, wx.WXK_DELETE, ID_REMOVE), 
+        (wx.ACCEL_SHIFT, wx.WXK_DELETE, ID_CLEAR)
+      ])
       frame.SetAcceleratorTable(accel_tbl)
-      frame.Bind(wx.EVT_CHAR_HOOK, lambda evt: frame.Close() if evt.GetKeyCode() == wx.WXK_ESCAPE else evt.Skip())
+      
+      def _on_history_char_hook(evt):
+        kc = evt.GetKeyCode()
+        if kc == wx.WXK_ESCAPE:
+          frame.Close()
+          return
+        
+        # Handle Alt+Shift+C
+        if kc == ord('C') and evt.ShiftDown() and evt.AltDown():
+          do_copy_all()
+          return
+          
+        evt.Skip()
+
+      frame.Bind(wx.EVT_CHAR_HOOK, _on_history_char_hook)
       frame.Bind(wx.EVT_CLOSE, lambda evt: _clear_open_dialog(evt, frame))
 
       panel.SetSizer(sizer); frame.Show(); frame.Raise(); wx.CallAfter(lb.SetFocus)
@@ -1485,6 +1664,10 @@ class MwWordLexiconSettingsPanel(gui.settingsDialogs.SettingsPanel):
       settings_box = wx.StaticBox(self, label="Settings")
       settings_sizer = wx.StaticBoxSizer(settings_box, wx.VERTICAL)
 
+      # Sound Effects Checkbox
+      self.enable_sounds_cb = wx.CheckBox(self, label="Enable Sound Effects")
+      settings_sizer.Add(self.enable_sounds_cb, 0, wx.ALL, 6)
+
       # History size
       hist_row = wx.BoxSizer(wx.HORIZONTAL)
       history_label = wx.StaticText(self, label="History size (items to keep):")
@@ -1552,6 +1735,17 @@ class MwWordLexiconSettingsPanel(gui.settingsDialogs.SettingsPanel):
       return
     try:
       sec = ensure_config_section(SECTION)
+      
+      # Enable Sounds - Fixed to handle string/bool conversion
+      try:
+         raw_val = sec.get("enable_sounds", False)
+         if isinstance(raw_val, str):
+           is_enabled = raw_val.lower() == "true"
+         else:
+           is_enabled = bool(raw_val)
+         self.enable_sounds_cb.SetValue(is_enabled)
+      except Exception:
+         self.enable_sounds_cb.SetValue(False)
 
       # history_size
       try:
@@ -1646,12 +1840,18 @@ class MwWordLexiconSettingsPanel(gui.settingsDialogs.SettingsPanel):
       except Exception:
         retention_unit = "days"
 
+      try:
+        sounds_val = bool(self.enable_sounds_cb.GetValue())
+      except Exception:
+        sounds_val = False
+
       # Write preserving types
       try:
         config.conf[SECTION]["history_size"] = new_size
         config.conf[SECTION]["cycle_history"] = cycle_val
         config.conf[SECTION]["history_retention_value"] = retention_value
         config.conf[SECTION]["history_retention_unit"] = retention_unit
+        config.conf[SECTION]["enable_sounds"] = sounds_val
       except Exception as e:
         ui.message(f"MW-word-lexicon: failed to write settings to config ({e})")
 
