@@ -1167,12 +1167,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
   def script_pronounce_selected_word(self, gesture):
     self._ensure_resources_loaded()
     
-    # Try to use the word from the last lookup if available (e.g. after pressing 'd'), 
-    # otherwise fetch selection.
-    word = getattr(self, "last_selected_word", None) or get_valid_selected_word()
+    word = get_valid_selected_word()
     if not word:
       return
-    # Update last_selected_word just in case we fetched a new one
+
     self.last_selected_word = word
 
     def worker():
@@ -1184,7 +1182,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           return
         url = build_mw_audio_url(aid)
         
-        # Read settings from config (shared with definition dialog)
         try:
           conf = config.conf["mwWordLexicon"]
           speed = int(conf.get("audio_speed", 100))
