@@ -137,3 +137,4 @@ The add-on uses specific technologies to provide a seamless experience. This is 
 - You can contact me via WhatsApp from [Here](https://wa.me/+201148467527)
 - In case you need to contact me via Telegram, you can do it from [Here](https://t.me/abdullahashraf4846)
 - You can visit my Youtube channel from [Here](https://www.youtube.com/@AbdullahAshraf-zc5dx)
+- You can watch the full video tutorial explaining how to use the MW Word Lexicon add-on in Arabic from [Here](https://youtu.be/tCNyqbxFJzY)

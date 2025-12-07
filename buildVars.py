@@ -24,8 +24,9 @@ addon_info = {
 	# Add-on description
 	# Translators: Long description to be shown for this add-on on add-on information from add-on store
 	"addon_description": _("""
-						This NVDA add-on manages you instantly to look up word definitions, synonyms, and antonyms using the Merriam-Webster Dictionary API. Also includes a 'Word of the Day' feature to expand your vocabulary, all without leaving your current application.
-						The add-on offers convenient keyboard shortcuts to trigger these functions, enhancing accessibility and usability for NVDA users.
+						This NVDA add-on enables you instantly to look up word definitions, synonyms, and antonyms using the Merriam-Webster Dictionary API. Also includes a 'Word of the Day' feature to expand your vocabulary, all without leaving your current application.
+						With the release of version 1.3, the add-on now features an optional comprehensive sound effects scheme for enhanced feedback. Additionally, it utilizes a new layer-based shortcut system designed to prevent conflicts with global shortcuts reserved for other programs, ensuring a smoother and more accessible user experience.
+						To learn more about the add-on, you are invited to visit its User Guide by pressing the shortcut key Ctrl+Shift+D and then pressing F1.
 						"""),
 	# version
 	"addon_version": "1.3",
