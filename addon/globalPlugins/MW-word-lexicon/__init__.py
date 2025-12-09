@@ -331,15 +331,25 @@ def extract_all_examples(entry, keyword):
 
 def get_word_definition_from_proxy(word):
   """
-  Query dictionary proxy and return formatted definitions+examples or an error string.
+  Query dictionary proxy.
+  Returns:
+    - String: Formatted definition if found.
+    - List: A list of suggested words if spelling is wrong.
+    - String (Error): If connection fails or no data.
   """
   try:
     response = requests.get(DICTIONARY_API_URL.format(word), timeout=6)
   except Exception:
     return "Failed to connect to the dictionary service."
+    
   if response.status_code == 200:
     try:
       data = response.json()
+      
+      # Check if data is a list of strings (Suggestions)
+      if data and isinstance(data, list) and isinstance(data[0], str):
+        return data  # Return the list of suggestions directly
+
       if data and isinstance(data, list):
         all_definitions = []
         all_examples = []
@@ -721,7 +731,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     GlobalPlugin.historyIndex = -1
     GlobalPlugin.restoring = False
 
-    # 2. Start Retention Thread
+    # 2. Start Retention Thread (Moved here to prevent startup lag)
     try:
       self._start_retention_thread()
     except Exception:
@@ -860,6 +870,89 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         pass
     except Exception:
       pass
+
+  def _show_suggestions_menu(self, suggestions, original_word_type="definition"):
+    """
+    Displays a context menu with spelling suggestions.
+    Handles re-querying for definition, thesaurus, or antonyms upon selection.
+    Plays 'tick.wav' when navigating through menu items.
+    """
+    if not suggestions:
+      return
+
+    # Create a hidden frame to anchor the popup menu.
+    # wx.FRAME_NO_TASKBAR ensures it doesn't appear in the taskbar.
+    style = wx.FRAME_NO_TASKBAR | wx.STAY_ON_TOP
+    frame = wx.Frame(None, title="Suggestions", size=(0, 0), style=style)
+    
+    # Move frame off-screen to ensure invisibility.
+    frame.Move((-5000, -5000))
+
+    menu = wx.Menu()
+    title_item = menu.Append(wx.ID_ANY, "Did you mean: ...?")
+    title_item.Enable(False)
+    menu.AppendSeparator()
+
+    for sugg in suggestions[:10]:
+      item_id = wx.NewIdRef()
+      menu.Append(item_id, sugg)
+      
+      # Closure to capture the specific suggestion word.
+      def on_suggestion_click(event, word=sugg):
+        # Retry the search with the selected word based on the original request type.
+        if original_word_type == "definition":
+          self.threaded_request(self.get_word_definition, word)
+        elif original_word_type == "thesaurus":
+          # Helper logic to cache thesaurus result if found.
+          def get_and_cache_thesaurus(w):
+            result = thesaurus.get_word_thesaurus(w)
+            if result:
+              self.last_thesaurus_text = result
+              return result
+            # Fallback: check if the new word itself returns suggestions.
+            check = get_word_definition_from_proxy(w)
+            if isinstance(check, list):
+              return check
+            return None
+          self.threaded_request(get_and_cache_thesaurus, word)
+        elif original_word_type == "antonyms":
+          # Helper logic to cache antonyms result if found.
+          def get_and_cache_antonyms(w):
+            result = thesaurus.get_word_antonyms(w)
+            if result:
+              self.last_antonyms_text = result
+              return result
+            # Fallback: check if the new word itself returns suggestions.
+            check = get_word_definition_from_proxy(w)
+            if isinstance(check, list):
+              return check
+            return None
+          self.threaded_request(get_and_cache_antonyms, word)
+        pass
+
+      menu.Bind(wx.EVT_MENU, on_suggestion_click, id=item_id)
+
+    # Bind menu highlight event to play tick sound during navigation (Up/Down arrows).
+    def _on_menu_highlight(event):
+      play_sfx("tick.wav")
+      event.Skip()
+
+    frame.Bind(wx.EVT_MENU_HIGHLIGHT, _on_menu_highlight)
+
+    play_sfx("popupon.wav")
+    
+    # Frame must be shown and raised to receive keyboard focus for arrow navigation.
+    frame.Show()
+    frame.Raise()
+    frame.SetFocus()
+
+    # Blocking call on Windows; waits here until menu closes.
+    frame.PopupMenu(menu)
+    
+    play_sfx("popupoff.wav")
+    
+    menu.Destroy()
+    frame.Destroy()
 
   def _addToHistory(self, text):
     self._ensure_resources_loaded()
@@ -1097,20 +1190,36 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
   def threaded_request(self, target_func, *args):
     """
-    Generic helper to run a function in a background thread then call handle_output on main thread.
+    Generic helper to run a function in a background thread.
+    Handles results (text) or suggestions (list).
     """
-    # Ensure initialized before running logic
     self._ensure_resources_loaded()
     
+    # Determine the search type based on the target function for the callback
+    req_type = "definition"
+    func_name = getattr(target_func, "__name__", "")
+    if "thesaurus" in func_name:
+      req_type = "thesaurus"
+    elif "antonyms" in func_name:
+      req_type = "antonyms"
+
     def worker():
       result = target_func(*args)
+      
       def on_complete():
-        if result:
+        if isinstance(result, list):
+          # If result is a list, it's spelling suggestions
+          ui.message("Spelling suggestions available.")
+          self._show_suggestions_menu(result, req_type)
+        elif result:
+          # If result is a string, handle output normally
           self.handle_output(result)
         else:
           ui.message("Not found.")
           play_sfx("error.wav")
+          
       wx.CallAfter(on_complete)
+      
     thread = threading.Thread(target=worker)
     thread.daemon = True
     thread.start()
@@ -1517,7 +1626,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       description="Get thesaurus (synonyms) for the selected word.", 
       )
   def script_get_thesaurus(self, gesture):
+    """
+    Retrieves synonyms for the selected word.
+    If the word is not found, it checks for spelling suggestions via the definition API.
+    """
+    self._ensure_resources_loaded()
+    
     now = time.time()
+    # Handle double-press logic for immediate copy mode.
     if self.copy_mode == 1:
       status = handle_double_press(self.last_thesaurus_press_time, now, self.last_thesaurus_text, "Thesaurus")
       if status in ("copied", "empty"):
@@ -1537,9 +1653,24 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.last_selected_word = word
 
     def get_and_cache_thesaurus(word_to_lookup):
+      # Attempt to fetch synonyms.
       result = thesaurus.get_word_thesaurus(word_to_lookup)
-      if result:
+      
+      # FIX: More robust check for invalid results.
+      # If result contains "no synonyms", "not found", "did you mean", or is just None, treat as failure.
+      bad_indicators = ["no synonyms", "not found", "did you mean", "suggestion", "failed"]
+      is_valid = result and not any(indicator in result.lower() for indicator in bad_indicators)
+
+      if is_valid:
         self.last_thesaurus_text = result
+        return result
+      
+      # If synonyms not found, query the proxy to see if it returns spelling suggestions (list).
+      check = get_word_definition_from_proxy(word_to_lookup)
+      if isinstance(check, list):
+        return check
+        
+      # Return the original result (error message) if no suggestions found
       return result
 
     self.threaded_request(get_and_cache_thesaurus, word)
@@ -1548,7 +1679,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       description="Get antonyms for the selected word.", 
       )
   def script_get_antonyms(self, gesture):
+    """
+    Retrieves antonyms for the selected word.
+    If the word is not found, it checks for spelling suggestions via the definition API.
+    """
+    self._ensure_resources_loaded()
+
     now = time.time()
+    # Handle double-press logic for immediate copy mode.
     if self.copy_mode == 1:
       status = handle_double_press(self.last_antonyms_press_time, now, self.last_antonyms_text, "Antonyms")
       if status in ("copied", "empty"):
@@ -1568,9 +1706,24 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     self.last_selected_word = word
 
     def get_and_cache_antonyms(word_to_lookup):
+      # Attempt to fetch antonyms.
       result = thesaurus.get_word_antonyms(word_to_lookup)
-      if result:
+      
+      # FIX: More robust check for invalid results.
+      # If result contains "no antonyms", "not found", "did you mean", or is just None, treat as failure.
+      bad_indicators = ["no antonyms", "not found", "did you mean", "suggestion", "failed"]
+      is_valid = result and not any(indicator in result.lower() for indicator in bad_indicators)
+
+      if is_valid:
         self.last_antonyms_text = result
+        return result
+        
+      # If antonyms not found, query the proxy to see if it returns spelling suggestions (list).
+      check = get_word_definition_from_proxy(word_to_lookup)
+      if isinstance(check, list):
+        return check
+      
+      # Return the original result (error message) if no suggestions found
       return result
 
     self.threaded_request(get_and_cache_antonyms, word)
