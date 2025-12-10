@@ -30,6 +30,7 @@ import threading
 import textInfos
 import nvwave
 import webbrowser
+import keyboardHandler
 
 # Get the directory of the current addon.
 addon_dir = os.path.dirname(__file__)
@@ -165,8 +166,9 @@ def play_layer_sound(filename):
   t.daemon = True
   t.start()
 
-def _bind_dialog_common_sounds(frame, context="generic"):
-  play_sfx("dialogopen.wav")
+def _bind_dialog_common_sounds(frame, context="generic", play_open_sound=True):
+  if play_open_sound:
+    play_sfx("dialogopen.wav")
   
   def _on_close_sfx(evt):
     play_sfx("dialogclose.wav")
@@ -1006,7 +1008,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
   def get_word_definition(self, word):
     return get_word_definition_from_proxy(word)
 
-  def _fetch_audio_and_show_dialog(self, text, word):
+  def _fetch_audio_and_show_dialog(self, text, word, title="Definition"):
+    """
+    Fetches audio metadata for the word and displays the result dialog.
+    
+    Args:
+      text (str): The definition or content text.
+      word (str): The word to look up audio for.
+      title (str): The title of the dialog window.
+    """
     try:
       data = http_get_json(DICTIONARY_API_URL.format(word))
       audio_id = find_first_audio_id(data)
@@ -1015,29 +1025,178 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         audio_url = None
       else:
         audio_url = build_mw_audio_url(audio_id)
-      wx.CallAfter(self._create_and_show_dialog, text, audio_url, word)
+      # Pass the title to the dialog creation function.
+      wx.CallAfter(self._create_and_show_dialog, text, audio_url, word, title)
     except Exception as e:
       wx.CallAfter(ui.message, f"Error: {str(e)}")
 
-  def _create_and_show_dialog(self, text, audio_url, original_word):
-    """Helper for handle_output (mode 2) to create the dialog."""
+  def handle_output(self, text, title="Definition", needs_selection=False):
+    """
+    Handles the display or copying of the result text based on the current copy mode.
+    Decides whether to speak, copy, or show the dialog.
+    """
     global OPEN_DIALOG
-    if OPEN_DIALOG:
-      ui.message("Please close the open dialog before opening another.")
-      play_sfx("error.wav")
-      return
-    frame = wx.Frame(None, title="Definition", size=(600, 400))
+    self._ensure_resources_loaded()
+    
+    if self.copy_mode == 0:
+      # Mode 0: Copy and Speak.
+      if OPEN_DIALOG: 
+         OPEN_DIALOG.Close()
+      
+      # Since we closed the dialog, we just perform the copy/speak action.
+      api.copyToClip(text)
+      self._addToHistory(text)
+      ui.message(text)
+
+    elif self.copy_mode == 1:
+      # Mode 1: Speak only (Double press to copy).
+      if OPEN_DIALOG: 
+         OPEN_DIALOG.Close()
+      
+      ui.message(text)
+
+    elif self.copy_mode == 2:
+      # Mode 2: Show Dialog.
+      def _infer_word_from_text(t):
+        try:
+          head = (t.split(":\n", 1)[0] or "").strip()
+          return head if head else None
+        except Exception:
+          return None
+
+      # Try to guess the word to fetch audio for it
+      safe_word = getattr(self, "last_selected_word", None) or _infer_word_from_text(text) or ""
+      
+      # 1. Update the dialog immediately with text (Audio will come later)
+      self._update_existing_dialog(text, None, safe_word, title, needs_selection)
+
+      # 2. Fetch audio in background
+      def fetch_audio_bg():
+        try:
+           data = http_get_json(DICTIONARY_API_URL.format(safe_word))
+           aid = find_first_audio_id(data)
+           if aid:
+             url = build_mw_audio_url(aid)
+             wx.CallAfter(self._update_existing_dialog_audio, url, safe_word)
+        except Exception:
+           pass
+      
+      threading.Thread(target=fetch_audio_bg, daemon=True).start()
+
+      api.copyToClip(text)
+      self._addToHistory(text)
+      self.last_definition_text = text
+
+  def _update_existing_dialog_audio(self, audio_url, original_word):
+    """
+    Called asynchronously when audio URL is resolved.
+    Updates the Play button binding in the already open dialog.
+    """
+    global OPEN_DIALOG
+    frame = OPEN_DIALOG
+    # Only update if the frame is still open and has a play button
+    if frame and hasattr(frame, "_play_btn"):
+       btn = frame._play_btn
+       
+       # We need to find the sliders to get current speed/volume
+       panel = frame.GetChildren()[0]
+       children = panel.GetChildren()
+       speed_slider = None
+       volume_slider = None
+       for c in children:
+          if isinstance(c, wx.Slider):
+             if not speed_slider: speed_slider = c
+             else: volume_slider = c; break
+       
+       if speed_slider and volume_slider:
+           def do_play_new(evt=None):
+              sp = speed_slider.GetValue()
+              vol = volume_slider.GetValue()
+              play_with_ffplay(audio_url, sp, vol)
+           
+           # Unbind previous events and bind the new one
+           btn.Unbind(wx.EVT_BUTTON)
+           btn.Bind(wx.EVT_BUTTON, lambda evt: threading.Thread(target=do_play_new, daemon=True).start())
+
+  def _create_and_show_dialog(self, text, audio_url, original_word, title="Definition", needs_selection=False):
+    """
+    Creates the bare-bones Dialog Frame if it doesn't exist.
+    Then delegates the UI building to _update_existing_dialog to avoid code duplication.
+    """
+    global OPEN_DIALOG
+    
+    # If a dialog is already open, strictly close it to avoid duplicates
+    if OPEN_DIALOG: 
+      try:
+        OPEN_DIALOG.Close()
+      except Exception:
+        pass
+    
+    # Create the Frame
+    frame = wx.Frame(None, title=title, size=(600, 400))
     OPEN_DIALOG = frame
     
-    # Bind Common Sounds
-    _bind_dialog_common_sounds(frame, context="definition")
-
+    # Create the Panel and basic structure
     panel = wx.Panel(frame)
     sizer = wx.BoxSizer(wx.VERTICAL)
+    panel.SetSizer(sizer)
 
-    text_ctrl = wx.TextCtrl(panel, value=text, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
-    sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
+    # Bind sounds
+    _bind_dialog_common_sounds(frame, context="definition", play_open_sound=False)
+    frame.Bind(wx.EVT_CLOSE, lambda evt: _clear_open_dialog(evt, frame))
+    
+    # Delegate the actual UI population to the update function
+    self._update_existing_dialog(text, audio_url, original_word, title, needs_selection)
+    
+    frame.Show()
+    frame.Raise()
 
+  def _update_existing_dialog(self, text, audio_url, original_word, title, needs_selection):
+    """
+    The main UI Builder. It populates or updates the dialog with Text, Buttons, and Logic.
+    It handles the 'Smart Replacement' logic logic as well.
+    """
+    # Play the open sound NOW, as the content is ready to be shown.
+    play_sfx("dialogopen.wav")
+
+    global OPEN_DIALOG
+    frame = OPEN_DIALOG
+    
+    # Safety check: if frame is gone, create it.
+    if not frame:
+       self._create_and_show_dialog(text, audio_url, original_word, title, needs_selection)
+       return
+
+    frame.SetTitle(title)
+    
+    panel = frame.GetChildren()[0]
+    sizer = panel.GetSizer()
+    
+    # 1. Find the existing TextCtrl or Create it
+    # We try to preserve the TextCtrl to avoid flickering text
+    children = panel.GetChildren()
+    text_ctrl = None
+    for child in children:
+       if isinstance(child, wx.TextCtrl):
+          text_ctrl = child
+          break
+    
+    if text_ctrl:
+       # Detach it so it doesn't get destroyed by sizer.Clear()
+       sizer.Detach(text_ctrl)
+    
+    # 2. Clear all other controls (Buttons, Sliders from previous state)
+    sizer.Clear(delete_windows=True)
+
+    # 3. Update Text and Re-add TextCtrl
+    if text_ctrl:
+       text_ctrl.SetValue(text)
+       sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
+    else:
+       text_ctrl = wx.TextCtrl(panel, value=text, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
+       sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
+
+    # 4. Build Audio Controls
     try:
       conf = config.conf["mwWordLexicon"]
       init_speed = int(conf.get("audio_speed", 100))
@@ -1046,6 +1205,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       init_speed, init_vol = 100, 100
 
     play_button = wx.Button(panel, label="Play")
+    frame._play_btn = play_button # Store reference for async updates
     sizer.Add(play_button, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
 
     speed_label = wx.StaticText(panel, label="Speed:")
@@ -1058,32 +1218,23 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     volume_slider = wx.Slider(panel, value=init_vol, minValue=0, maxValue=100, style=wx.SL_HORIZONTAL)
     sizer.Add(volume_slider, 0, wx.EXPAND | wx.ALL, 10)
 
+    # Save settings on slide
     def _save_audio_settings(evt=None):
       try:
         config.conf["mwWordLexicon"]["audio_speed"] = speed_slider.GetValue()
         config.conf["mwWordLexicon"]["audio_volume"] = volume_slider.GetValue()
       except Exception:
         pass
-
     speed_slider.Bind(wx.EVT_SLIDER, _save_audio_settings)
     volume_slider.Bind(wx.EVT_SLIDER, _save_audio_settings)
 
+    # Audio Playback Logic
     def do_play_for_url(url):
       sp = speed_slider.GetValue()
       vol = volume_slider.GetValue()
       play_with_ffplay(url, sp, vol)
-
-      play_button.Bind(wx.EVT_BUTTON, lambda evt: threading.Thread(target=do_play_for_url, args=(audio_url,), daemon=True).start())
-
-    btn_row = wx.BoxSizer(wx.HORIZONTAL)
-    ok_button = wx.Button(panel, label="OK")
-    btn_row.Add(ok_button, 0, wx.ALL, 5)
-    cancel_button = wx.Button(panel, label="Cancel")
-    btn_row.Add(cancel_button, 0, wx.ALL, 5)
-    sizer.Add(btn_row, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
-
-    ok_button.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
-    cancel_button.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
+      # Re-bind to allow replaying
+      play_button.Bind(wx.EVT_BUTTON, lambda evt: threading.Thread(target=do_play_for_url, args=(url,), daemon=True).start())
 
     def _play_word_lookup(word_to_lookup):
       try:
@@ -1097,81 +1248,108 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       except Exception:
         wx.CallAfter(ui.message, "Failed to fetch pronunciation.")
 
-    play_button.Bind(
-      wx.EVT_BUTTON,
-      (lambda evt: threading.Thread(
-        target=(lambda: do_play_for_url(audio_url)) if audio_url else (lambda: _play_word_lookup(original_word)),
-        daemon=True
-      ).start())
-    )
+    # Initial Play Button Binding
+    if audio_url:
+       play_button.Bind(wx.EVT_BUTTON, lambda evt: threading.Thread(target=do_play_for_url, args=(audio_url,), daemon=True).start())
+    else:
+       play_button.Bind(wx.EVT_BUTTON, lambda evt: threading.Thread(target=_play_word_lookup, args=(original_word,), daemon=True).start())
 
+    # 5. Build Dialog Buttons
+    btn_row = wx.BoxSizer(wx.HORIZONTAL)
+    ok_button = wx.Button(panel, label="OK")
+    btn_row.Add(ok_button, 0, wx.ALL, 5)
+    cancel_button = wx.Button(panel, label="Cancel")
+    btn_row.Add(cancel_button, 0, wx.ALL, 5)
+    sizer.Add(btn_row, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
+
+    ok_button.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
+    cancel_button.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
+
+    # 6. Bind Keyboard Shortcuts & Replacement Logic
     def on_char_hook(evt):
       kc = evt.GetKeyCode()
       if kc == wx.WXK_ESCAPE:
         frame.Close()
         return
+
+      # Smart Replacement Logic
+      if title in ("Thesaurus", "Antonyms") and evt.ControlDown() and kc == wx.WXK_RETURN:
+        sel = text_ctrl.GetStringSelection().strip()
+        
+        if sel:
+          # NEW: Check if multiple items are selected (indicated by a comma)
+          if "," in sel:
+            ui.message("Please select only one synonym/antonym.")
+            play_sfx("error.wav")
+            return
+
+          api.copyToClip(sel)
+          frame.Close()          
+
+          def _paste_replacement():
+            time.sleep(0.2)
+            try:
+              if needs_selection:
+                 # FIX: "Rubber-banding" movement to ensure we are at the true start of the word.
+                 # 1. Move Right first. If we were already at the start, Ctrl+Left would assume "previous word".
+                 # By moving right (Ctrl+Right), we ensure we are either at the end of the current word or start of next.
+                 keyboardHandler.KeyboardInputGesture.fromName("control+rightArrow").send()
+                 time.sleep(0.05)
+                 
+                 # 2. Now Move Left. This will reliably land at the start of the target word.
+                 keyboardHandler.KeyboardInputGesture.fromName("control+leftArrow").send()
+                 time.sleep(0.05)
+                 
+                 # 3. Select strictly by length of original word
+                 word_len = len(original_word) if original_word else 0
+                 if word_len > 0:
+                    for _ in range(word_len):
+                        keyboardHandler.KeyboardInputGesture.fromName("shift+rightArrow").send()
+                 else:
+                    # Fallback
+                    keyboardHandler.KeyboardInputGesture.fromName("control+shift+rightArrow").send()
+                 
+                 time.sleep(0.05)
+
+              keyboardHandler.KeyboardInputGesture.fromName("control+v").send()
+            except Exception:
+              pass
+              
+          threading.Thread(target=_paste_replacement, daemon=True).start()
+        else:
+          ui.message("Please select a word to replace.")
+        return
+
+      # Ctrl+P for Play
       if evt.ControlDown() and (kc == ord('P') or kc == ord('p')):
         sel = text_ctrl.GetStringSelection().strip()
         if sel:
-          words = [w for w in re.split(r'\s+', sel) if w]
-          if len(words) > 1:
-            ui.message("Cannot play pronunciation: select a single word.")
-          else:
-            threading.Thread(target=_play_word_lookup, args=(words[0],), daemon=True).start()
+           threading.Thread(target=_play_word_lookup, args=(sel.split()[0],), daemon=True).start()
         else:
-          if audio_url:
-            threading.Thread(target=do_play_for_url, args=(audio_url,), daemon=True).start()
-          else:
-            threading.Thread(target=_play_word_lookup, args=(original_word,), daemon=True).start()
+           evt_obj = wx.CommandEvent(wx.EVT_BUTTON.typeId, play_button.GetId())
+           play_button.GetEventHandler().ProcessEvent(evt_obj)
         return
-
+        
+      # Speed/Volume Shortcuts
       if evt.ShiftDown() and kc in (wx.WXK_UP, wx.WXK_DOWN):
         cur = speed_slider.GetValue(); step = 5; newv = cur + (step if kc == wx.WXK_UP else -step)
         newv = max(speed_slider.GetMin(), min(speed_slider.GetMax(), newv)); speed_slider.SetValue(newv)
-        _save_audio_settings()
-        ui.message(f"Speed {newv}%")
+        _save_audio_settings(); ui.message(f"Speed {newv}%")
         return
       if evt.ControlDown() and kc in (wx.WXK_UP, wx.WXK_DOWN):
         cur = volume_slider.GetValue(); step = 5; newv = cur + (step if kc == wx.WXK_UP else -step)
         newv = max(volume_slider.GetMin(), min(volume_slider.GetMax(), newv)); volume_slider.SetValue(newv)
-        _save_audio_settings()
-        ui.message(f"Volume {newv}%")
+        _save_audio_settings(); ui.message(f"Volume {newv}%")
         return
+
       evt.Skip()
 
+    # Unbind any old CharHooks and Bind the new one
+    frame.Unbind(wx.EVT_CHAR_HOOK)
     frame.Bind(wx.EVT_CHAR_HOOK, on_char_hook)
-    frame.Bind(wx.EVT_CLOSE, lambda evt: _clear_open_dialog(evt, frame))
-    panel.SetSizer(sizer)
-    frame.Show()
-    frame.Raise()
-
-  def handle_output(self, text):
-    # Ensure initialized before writing history
-    self._ensure_resources_loaded()
     
-    if self.copy_mode == 0:
-      api.copyToClip(text)
-      self._addToHistory(text)
-      ui.message(text)
-    elif self.copy_mode == 1:
-      ui.message(text)
-    elif self.copy_mode == 2:
-      def _infer_word_from_text(t):
-        try:
-          head = (t.split(":\n", 1)[0] or "").strip()
-          return head if head else None
-        except Exception:
-          return None
-
-      safe_word = getattr(self, "last_selected_word", None) or _infer_word_from_text(text) or ""
-      audio_thread = threading.Thread(target=self._fetch_audio_and_show_dialog, args=(text, safe_word))
-
-      audio_thread.daemon = True
-      audio_thread.start()
-
-      api.copyToClip(text)
-      self._addToHistory(text)
-      self.last_definition_text = text
+    panel.Layout()
+    panel.Refresh()
 
   def terminate(self):
     try:
@@ -1188,14 +1366,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     except Exception:
       pass
 
-  def threaded_request(self, target_func, *args):
+  def threaded_request(self, target_func, *args, **kwargs):
     """
-    Generic helper to run a function in a background thread.
-    Handles results (text) or suggestions (list).
+    Runs a target function in a background thread to prevent UI freezing.
+    It shows a 'Loading' dialog immediately ONLY if Copy Mode is 2 (Show Dialog),
+    ensuring other modes work without flashing windows.
     """
     self._ensure_resources_loaded()
     
-    # Determine the search type based on the target function for the callback
+    # Determine request type (definition, thesaurus, antonyms)
     req_type = "definition"
     func_name = getattr(target_func, "__name__", "")
     if "thesaurus" in func_name:
@@ -1203,18 +1382,39 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     elif "antonyms" in func_name:
       req_type = "antonyms"
 
+    # Capture the needs_selection flag to pass it down to the UI
+    needs_selection = kwargs.get('needs_selection', False)
+
+    # FIX: Only show loading dialog if we are explicitly in "Show Dialog" mode (Mode 2).
+    should_show_loading = (self.copy_mode == 2)
+
+    if should_show_loading:
+      wx.CallAfter(self._show_loading_dialog, req_type.capitalize())
+
     def worker():
       result = target_func(*args)
       
       def on_complete():
+        # GLOBAL DECLARATION MUST BE AT THE VERY TOP OF THE FUNCTION
+        global OPEN_DIALOG
+        
+        # If result is a list (suggestions), close loading dialog and show menu
         if isinstance(result, list):
-          # If result is a list, it's spelling suggestions
+          # Close the loading dialog if it exists
+          if OPEN_DIALOG:
+            OPEN_DIALOG.Close()
+          
           ui.message("Spelling suggestions available.")
           self._show_suggestions_menu(result, req_type)
+        
         elif result:
-          # If result is a string, handle output normally
-          self.handle_output(result)
+          # If we have a result, handle output.
+          self.handle_output(result, title=req_type.capitalize(), needs_selection=needs_selection)
+        
         else:
+          # Not found
+          if OPEN_DIALOG:
+             OPEN_DIALOG.Close()
           ui.message("Not found.")
           play_sfx("error.wav")
           
@@ -1223,6 +1423,49 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     thread = threading.Thread(target=worker)
     thread.daemon = True
     thread.start()
+
+  def _show_loading_dialog(self, title="Loading"):
+    """
+    Displays a temporary dialog with a 'Loading...' message to provide
+    instant feedback to the user while the background thread fetches data.
+    """
+    global OPEN_DIALOG
+    
+    if OPEN_DIALOG:
+      try:
+        OPEN_DIALOG.Close()
+      except Exception:
+        pass
+
+    frame = wx.Frame(None, title=title, size=(600, 400))
+    OPEN_DIALOG = frame
+    
+    _bind_dialog_common_sounds(frame, context="definition", play_open_sound=False)
+
+    panel = wx.Panel(frame)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+
+    text_ctrl = wx.TextCtrl(panel, value="Fetching data, please wait...", style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
+    sizer.Add(text_ctrl, 1, wx.EXPAND | wx.ALL, 10)
+
+    btn_row = wx.BoxSizer(wx.HORIZONTAL)
+    cancel_button = wx.Button(panel, label="Cancel")
+    btn_row.Add(cancel_button, 0, wx.ALL, 5)
+    sizer.Add(btn_row, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
+
+    cancel_button.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
+    frame.Bind(wx.EVT_CLOSE, lambda evt: _clear_open_dialog(evt, frame))
+    
+    def on_char_hook(evt):
+      if evt.GetKeyCode() == wx.WXK_ESCAPE:
+        frame.Close()
+      else:
+        evt.Skip()
+    frame.Bind(wx.EVT_CHAR_HOOK, on_char_hook)
+
+    panel.SetSizer(sizer)
+    frame.Show()
+    frame.Raise()
 
   @script(
       description="MW Lexicon layer commands. Press a/s/d/h/t/u.", 
@@ -1312,9 +1555,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       description="Open Search Dialog", 
       )
   def script_showSearchDialog(self, gesture):
+    global OPEN_DIALOG
     self._ensure_resources_loaded()
     
-    global OPEN_DIALOG
     if OPEN_DIALOG:
       ui.message("Please close the open dialog before opening another.")
       return
@@ -1440,9 +1683,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     description="Show or cycle through history", 
   )
   def script_show_history_list(self, gesture):
+    global OPEN_DIALOG
     self._ensure_resources_loaded()
     
-    # Read the current cycle_history setting directly from config
     try:
       sec = ensure_config_section(SECTION)
       cv = sec.get("cycle_history", False)
@@ -1455,7 +1698,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     if not GlobalPlugin.history:
       ui.message("No history available.")
-      play_sfx("error.wav") # Error SFX for empty history
+      play_sfx("error.wav")
       self.finish()
       return
 
@@ -1474,9 +1717,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         ui.message("History cycle error.")
       return
 
-    # Fallback: open the full history dialog
     try:
-      global OPEN_DIALOG
       if OPEN_DIALOG:
         ui.message("Please close the open dialog before opening another.")
         play_sfx("error.wav")
@@ -1499,7 +1740,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
       sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
 
-      # Sound: Listbox Tick (Up/Down/Left/Right) with Boundary Check (End Sound)
       def _on_list_key(evt):
         kc = evt.GetKeyCode()
         if kc in (wx.WXK_UP, wx.WXK_DOWN, wx.WXK_LEFT, wx.WXK_RIGHT):
@@ -1509,13 +1749,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           if kc in (wx.WXK_UP, wx.WXK_LEFT):
             if sel == 0:
               play_sfx("end.wav")
-              return # Consume event
+              return
             else:
               play_sfx("tick.wav")
           elif kc in (wx.WXK_DOWN, wx.WXK_RIGHT):
             if sel == count - 1:
               play_sfx("end.wav")
-              return # Consume event
+              return
             else:
               play_sfx("tick.wav")
         evt.Skip()
@@ -1593,8 +1833,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       
       close_btn.Bind(wx.EVT_BUTTON, lambda evt: frame.Close())
       
-      # Simplified Accelerator Table: Only standard keys here.
-      # We handle Alt+Shift+C manually in CharHook to suppress the click sound.
       accel_tbl = wx.AcceleratorTable([
         (wx.ACCEL_CTRL, ord('C'), ID_COPY), 
         (wx.ACCEL_NORMAL, wx.WXK_DELETE, ID_REMOVE), 
@@ -1608,7 +1846,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
           frame.Close()
           return
         
-        # Handle Alt+Shift+C
         if kc == ord('C') and evt.ShiftDown() and evt.AltDown():
           do_copy_all()
           return
@@ -1628,12 +1865,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
   def script_get_thesaurus(self, gesture):
     """
     Retrieves synonyms for the selected word.
-    If the word is not found, it checks for spelling suggestions via the definition API.
+    Handles 'Smart Replacement' logic: checks if text is explicitly selected or just caret focused.
     """
     self._ensure_resources_loaded()
     
     now = time.time()
-    # Handle double-press logic for immediate copy mode.
     if self.copy_mode == 1:
       status = handle_double_press(self.last_thesaurus_press_time, now, self.last_thesaurus_text, "Thesaurus")
       if status in ("copied", "empty"):
@@ -1652,12 +1888,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       return
     self.last_selected_word = word
 
+    # Check if the selection is collapsed (just a caret) to determine if we need to force selection later during replacement.
+    needs_selection = False
+    try:
+      focus = api.getFocusObject()
+      if hasattr(focus, "makeTextInfo"):
+         info = focus.makeTextInfo(textInfos.POSITION_SELECTION)
+         if info and info.isCollapsed:
+            needs_selection = True
+    except Exception:
+       # Fallback: if we can't determine, assume we might need selection if string length < 1?
+       pass
+
     def get_and_cache_thesaurus(word_to_lookup):
-      # Attempt to fetch synonyms.
       result = thesaurus.get_word_thesaurus(word_to_lookup)
-      
-      # FIX: More robust check for invalid results.
-      # If result contains "no synonyms", "not found", "did you mean", or is just None, treat as failure.
       bad_indicators = ["no synonyms", "not found", "did you mean", "suggestion", "failed"]
       is_valid = result and not any(indicator in result.lower() for indicator in bad_indicators)
 
@@ -1665,15 +1909,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         self.last_thesaurus_text = result
         return result
       
-      # If synonyms not found, query the proxy to see if it returns spelling suggestions (list).
       check = get_word_definition_from_proxy(word_to_lookup)
       if isinstance(check, list):
         return check
-        
-      # Return the original result (error message) if no suggestions found
       return result
 
-    self.threaded_request(get_and_cache_thesaurus, word)
+    # Pass the needs_selection flag to the threaded request
+    self.threaded_request(get_and_cache_thesaurus, word, needs_selection=needs_selection)
 
   @script(
       description="Get antonyms for the selected word.", 
@@ -1681,12 +1923,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
   def script_get_antonyms(self, gesture):
     """
     Retrieves antonyms for the selected word.
-    If the word is not found, it checks for spelling suggestions via the definition API.
+    Handles 'Smart Replacement' logic: checks if text is explicitly selected or just caret focused.
     """
     self._ensure_resources_loaded()
 
     now = time.time()
-    # Handle double-press logic for immediate copy mode.
     if self.copy_mode == 1:
       status = handle_double_press(self.last_antonyms_press_time, now, self.last_antonyms_text, "Antonyms")
       if status in ("copied", "empty"):
@@ -1705,12 +1946,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       return
     self.last_selected_word = word
 
+    # Check if the selection is collapsed (just a caret)
+    needs_selection = False
+    try:
+      focus = api.getFocusObject()
+      if hasattr(focus, "makeTextInfo"):
+         info = focus.makeTextInfo(textInfos.POSITION_SELECTION)
+         if info and info.isCollapsed:
+            needs_selection = True
+    except Exception:
+       pass
+
     def get_and_cache_antonyms(word_to_lookup):
-      # Attempt to fetch antonyms.
       result = thesaurus.get_word_antonyms(word_to_lookup)
-      
-      # FIX: More robust check for invalid results.
-      # If result contains "no antonyms", "not found", "did you mean", or is just None, treat as failure.
       bad_indicators = ["no antonyms", "not found", "did you mean", "suggestion", "failed"]
       is_valid = result and not any(indicator in result.lower() for indicator in bad_indicators)
 
@@ -1718,15 +1966,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         self.last_antonyms_text = result
         return result
         
-      # If antonyms not found, query the proxy to see if it returns spelling suggestions (list).
       check = get_word_definition_from_proxy(word_to_lookup)
       if isinstance(check, list):
         return check
-      
-      # Return the original result (error message) if no suggestions found
       return result
 
-    self.threaded_request(get_and_cache_antonyms, word)
+    self.threaded_request(get_and_cache_antonyms, word, needs_selection=needs_selection)
 
 # Configuration section name.
 SECTION = "mwWordLexicon"
