@@ -31,6 +31,7 @@ import textInfos
 import nvwave
 import webbrowser
 import keyboardHandler
+import urllib.parse
 
 # Get the directory of the current addon.
 addon_dir = os.path.dirname(__file__)
@@ -210,6 +211,36 @@ def _bind_dialog_common_sounds(frame, context="generic", play_open_sound=True):
   frame.Bind(wx.EVT_CHAR_HOOK, _on_char_hook_sfx)
 
 DICTIONARY_API_URL = "https://late-lake-4ea8.abdullahashraf4846.workers.dev/?word={}"
+DATAMUSE_API_URL = "https://api.datamuse.com/words"
+
+def query_datamuse(params, limit=20):
+  """
+  Generic helper to query the Datamuse API.
+  Useful for wildcards, rhymes, near-spellings, etc.
+  params: Dictionary of query parameters (e.g. {'sp': 't??t'} or {'rel_rhy': 'book'})
+  """
+  try:
+    # Set a default limit if not provided in params
+    if "max" not in params:
+      params["max"] = limit
+      
+    response = requests.get(DATAMUSE_API_URL, params=params, timeout=5)
+    
+    if response.status_code == 200:
+      data = response.json()
+      # Datamuse returns a list of objects: [{"word": "foo", "score": 100}, ...]
+      if isinstance(data, list):
+        return [item["word"] for item in data if isinstance(item, dict) and "word" in item]
+  except Exception:
+    pass
+  return []
+
+def get_wildcard_suggestions(pattern):
+  """
+  Fetches suggestions for a wildcard pattern using the generic Datamuse helper.
+  'sp' parameter stands for 'spelled like'.
+  """
+  return query_datamuse({"sp": pattern.strip()})
 
 def build_mw_audio_url(audio_id):
   if not audio_id:
@@ -545,7 +576,7 @@ class SearchDialog(wx.Frame):
 
     self.search_box = wx.TextCtrl(panel, value=pre_filled_text)
     
-    self.search_box.Bind(wx.EVT_SET_FOCUS, lambda evt: (play_sfx("searchbox].wav"), evt.Skip()))
+    self.search_box.Bind(wx.EVT_SET_FOCUS, lambda evt: (play_sfx("searchbox.wav"), evt.Skip()))
     
     search_sizer.Add(self.search_box, 1, wx.EXPAND | wx.ALL, 5)
 
@@ -603,6 +634,11 @@ class SearchDialog(wx.Frame):
       play_sfx("noselection.wav")
       return
 
+    # Check for wildcards
+    if '*' in query or '?' in query:
+       self.handle_wildcard_search(query)
+       return
+
     search_type = self.search_type.GetValue()
     self.results_area.SetValue(f"Searching for {search_type} of '{query}'...")
 
@@ -618,6 +654,12 @@ class SearchDialog(wx.Frame):
       except Exception as e:
         result = f"An error occurred: {e}"
       
+      # Check if result is actually a list of suggestions (implied wildcard/misspelling return)
+      if isinstance(result, list):
+         wx.CallAfter(self.show_suggestions_menu, result)
+         wx.CallAfter(self.results_area.SetValue, "Please select a suggestion from the menu.")
+         return
+
       final_result = result or "Not found."
       
       is_error = "Not found" in final_result or "Error" in final_result or "Failed" in final_result
@@ -647,6 +689,74 @@ class SearchDialog(wx.Frame):
     thread = threading.Thread(target=worker)
     thread.daemon = True
     thread.start()
+
+  def handle_wildcard_search(self, pattern):
+    """
+    Handles fetching and showing suggestions for wildcard patterns.
+    """
+    self.results_area.SetValue(f"Finding matches for pattern '{pattern}'...")
+    
+    def worker():
+      suggestions = get_wildcard_suggestions(pattern)
+      if suggestions:
+        wx.CallAfter(self.show_suggestions_menu, suggestions)
+        wx.CallAfter(self.results_area.SetValue, "Select a match from the menu.")
+      else:
+        wx.CallAfter(ui.message, "No matches found for this pattern.")
+        wx.CallAfter(play_sfx, "error.wav")
+        wx.CallAfter(self.results_area.SetValue, "No matches found.")
+    
+    thread = threading.Thread(target=worker)
+    thread.daemon = True
+    thread.start()
+
+  def show_suggestions_menu(self, suggestions):
+    """
+    Shows a context menu with the list of suggestions.
+    Selecting an item updates the search box and triggers a search immediately.
+    """
+    if not suggestions:
+      return
+
+    menu = wx.Menu()
+    # Add a disabled title item
+    title_item = menu.Append(wx.ID_ANY, "Suggestions:")
+    title_item.Enable(False)
+    menu.AppendSeparator()
+
+    # Limit to top 15 suggestions to avoid a huge list
+    for sugg in suggestions[:15]:
+      item_id = wx.NewIdRef()
+      menu.Append(item_id, sugg)
+      
+      def on_select(event, word=sugg):
+        self.search_box.SetValue(word)
+        # Trigger search immediately after selection
+        self.on_search(None, manual=True)
+
+      menu.Bind(wx.EVT_MENU, on_select, id=item_id)
+
+    # Bind menu highlight for tick sound
+    def _on_menu_highlight(event):
+      play_sfx("tick.wav")
+      event.Skip()
+
+    self.Bind(wx.EVT_MENU_HIGHLIGHT, _on_menu_highlight)
+
+    play_sfx("popupon.wav")
+    
+    # Show the menu anchored to the frame
+    self.PopupMenu(menu)
+    
+    play_sfx("popupoff.wav")
+    
+    menu.Destroy()
+    
+    # Unbind to clean up
+    try:
+        self.Unbind(wx.EVT_MENU_HIGHLIGHT)
+    except Exception:
+        pass
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
   """
