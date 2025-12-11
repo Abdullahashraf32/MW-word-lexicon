@@ -1847,6 +1847,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       sizer.Add(lbl, 0, wx.EXPAND | wx.ALL, 8)
 
       items = [entry.get("text") if isinstance(entry, dict) else str(entry) for entry in reversed(GlobalPlugin.history)]
+      # Preserve original order for "Recent" sorting.
+      original_items = list(items)
       lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
       sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
 
@@ -1916,11 +1918,52 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         dialog.Destroy()
 
       ID_COPY, ID_COPY_ALL, ID_REMOVE, ID_CLEAR = wx.NewIdRef(), wx.NewIdRef(), wx.NewIdRef(), wx.NewIdRef()
+      def do_sort_by_name(event):
+        """Sort items by the target word, ignoring prefixes like 'Synonyms for'."""
+        def _get_sort_key(item):
+          # Normalize text to lower case.
+          text = item.lower()
+          # List of prefixes to ignore during sort.
+          prefixes = ["word of the day: ", "synonyms for ", "antonyms for "]
+          for prefix in prefixes:
+            if text.startswith(prefix):
+              return text[len(prefix):].strip()
+          return text
+
+        current_items = lb.GetItems()
+        current_items.sort(key=_get_sort_key)
+        lb.Set(current_items)
+        if current_items:
+          lb.SetSelection(0)
+        play_sfx("tick.wav")
+
+      def do_sort_by_recent(event):
+        """Restore items to the original chronological order."""
+        lb.Set(original_items)
+        if original_items:
+          lb.SetSelection(0)
+        play_sfx("tick.wav")
+
       def on_context_menu(event):
         play_sfx("popupon.wav")
         menu = wx.Menu()
         menu.Append(ID_COPY, "Copy\tCtrl+C")
         menu.Append(ID_COPY_ALL, "Copy All\tAlt+Shift+C")
+        menu.AppendSeparator()
+
+        # Sort submenu configuration.
+        sort_menu = wx.Menu()
+        id_sort_name = wx.NewIdRef()
+        id_sort_recent = wx.NewIdRef()
+        
+        sort_menu.Append(id_sort_name, "Name")
+        sort_menu.Append(id_sort_recent, "Recent item")
+        menu.AppendSubMenu(sort_menu, "Sort by")
+
+        # Bind sort events.
+        menu.Bind(wx.EVT_MENU, do_sort_by_name, id=id_sort_name)
+        menu.Bind(wx.EVT_MENU, do_sort_by_recent, id=id_sort_recent)
+
         menu.AppendSeparator()
         menu.Append(ID_REMOVE, "Remove\tDelete")
         menu.Append(ID_CLEAR, "Clear\tShift+Delete")
