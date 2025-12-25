@@ -1796,6 +1796,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     global OPEN_DIALOG
     self._ensure_resources_loaded()
     
+    # Define a subtle visual marker for selected items
+    MARKER = "   ✓"
+
     try:
       sec = ensure_config_section(SECTION)
       cv = sec.get("cycle_history", False)
@@ -1843,33 +1846,59 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       _bind_dialog_common_sounds(frame, context="history")
       panel = wx.Panel(frame)
       sizer = wx.BoxSizer(wx.VERTICAL)
-      lbl = wx.StaticText(panel, label="Right-click for options or use keyboard shortcuts:")
+      
+      lbl = wx.StaticText(panel, label="Press Space to mark/unmark items. Right-click for options:")
       sizer.Add(lbl, 0, wx.EXPAND | wx.ALL, 8)
 
+      # Helper to get clean text from a potentially marked string
+      def get_clean_text(text):
+        if text.endswith(MARKER):
+          return text[:-len(MARKER)]
+        return text
+
       items = [entry.get("text") if isinstance(entry, dict) else str(entry) for entry in reversed(GlobalPlugin.history)]
-      # Preserve original order for "Recent" sorting.
       original_items = list(items)
+      
+      # Standard ListBox (Looks clean)
       lb = wx.ListBox(panel, choices=items, style=wx.LB_SINGLE)
       sizer.Add(lb, 1, wx.EXPAND | wx.ALL, 8)
 
       def _on_list_key(evt):
         kc = evt.GetKeyCode()
+        
+        # Space Key: Toggle Selection Logic
+        if kc == wx.WXK_SPACE:
+          sel = lb.GetSelection()
+          if sel != wx.NOT_FOUND:
+            current_text = lb.GetString(sel)
+            
+            if current_text.endswith(MARKER):
+              # Unmark
+              new_text = get_clean_text(current_text)
+              lb.SetString(sel, new_text)
+              # Play a subtle sound for unmarking if you want, or just tick
+              play_sfx("tick.wav") 
+            else:
+              # Mark
+              new_text = current_text + MARKER
+              lb.SetString(sel, new_text)
+              play_sfx("tick.wav")
+            
+            # Restore selection to the item (SetString sometimes loses it)
+            lb.SetSelection(sel)
+          return
+
+        # Navigation sounds
         if kc in (wx.WXK_UP, wx.WXK_DOWN, wx.WXK_LEFT, wx.WXK_RIGHT):
           sel = lb.GetSelection()
           count = lb.GetCount()
-          
           if kc in (wx.WXK_UP, wx.WXK_LEFT):
-            if sel == 0:
-              play_sfx("end.wav")
-              return
-            else:
-              play_sfx("tick.wav")
+            if sel == 0: play_sfx("end.wav"); return
+            else: play_sfx("tick.wav")
           elif kc in (wx.WXK_DOWN, wx.WXK_RIGHT):
-            if sel == count - 1:
-              play_sfx("end.wav")
-              return
-            else:
-              play_sfx("tick.wav")
+            if sel == count - 1: play_sfx("end.wav"); return
+            else: play_sfx("tick.wav")
+        
         evt.Skip()
 
       lb.Bind(wx.EVT_KEY_DOWN, _on_list_key)
@@ -1882,29 +1911,89 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       close_btn = wx.Button(panel, label="Close")
       sizer.Add(close_btn, 0, wx.ALIGN_CENTER | wx.ALL, 8)
 
+      # Helper to identify which items to act upon
+      def get_target_indices():
+        indices = []
+        count = lb.GetCount()
+        # 1. Look for marked items
+        for i in range(count):
+          if lb.GetString(i).endswith(MARKER):
+            indices.append(i)
+        
+        # 2. If no marked items, use current selection
+        if not indices:
+          sel = lb.GetSelection()
+          if sel != wx.NOT_FOUND:
+            indices.append(sel)
+            
+        return indices
+
       def do_copy_selected(event=None):
-        sel = lb.GetSelection()
-        if sel != wx.NOT_FOUND:
-            text = lb.GetString(sel)
-            api.copyToClip(text)
-            ui.message("History item copied.")
-      
+        indices = get_target_indices()
+        if indices:
+            # Collect clean text
+            text_list = [get_clean_text(lb.GetString(i)) for i in indices]
+            final_text = "\n".join(text_list)
+            api.copyToClip(final_text)
+            
+            if len(indices) == 1:
+               ui.message("Item copied.")
+            else:
+               ui.message(f"{len(indices)} items copied.")
+        else:
+            ui.message("Nothing selected.")
+
       def do_copy_all(event=None):
-        items = lb.GetItems()
-        if items:
-            all_items = "\n\n".join(items)
-            api.copyToClip(all_items)
+        count = lb.GetCount()
+        if count > 0:
+            # Must clean all items before copying
+            all_text = [get_clean_text(lb.GetString(i)) for i in range(count)]
+            api.copyToClip("\n\n".join(all_text))
             ui.message("All history items copied.")
             play_sfx("copyall.wav")
         else:
             ui.message("History is empty.")
 
       def do_remove_selected(event=None):
-        sel = lb.GetSelection(); original_index = len(GlobalPlugin.history) - 1 - sel
-        GlobalPlugin.history.pop(original_index); self._updateAndSaveHistory(GlobalPlugin.history)
-        lb.Delete(sel); ui.message("Item removed.")
-        if lb.GetCount() > 0: lb.SetSelection(min(sel, lb.GetCount() - 1))
-        else: play_sfx("historyremove.wav")
+        indices = get_target_indices()
+        if not indices:
+          return
+          
+        # Calculate original indices (handling the reverse display)
+        history_len = len(GlobalPlugin.history)
+        # Store as (listbox_index, original_history_index)
+        to_remove = []
+        
+        for lb_idx in indices:
+             orig_idx = history_len - 1 - lb_idx
+             to_remove.append((lb_idx, orig_idx))
+        
+        # Sort by original index descending to pop safely from backend
+        to_remove.sort(key=lambda x: x[1], reverse=True)
+        
+        # Remove from backend history
+        for _, orig_idx in to_remove:
+             if 0 <= orig_idx < len(GlobalPlugin.history):
+                 GlobalPlugin.history.pop(orig_idx)
+        
+        self._updateAndSaveHistory(GlobalPlugin.history)
+        
+        # Remove from UI (Must remove by listbox index descending)
+        # Sort by listbox index descending
+        indices.sort(reverse=True)
+        for idx in indices:
+             lb.Delete(idx)
+
+        msg = "Item removed." if len(indices) == 1 else f"{len(indices)} items removed."
+        ui.message(msg)
+
+        if lb.GetCount() > 0:
+             # Restore focus near the last action
+             anchor = indices[-1] # The smallest index (top-most in view)
+             anchor = min(anchor, lb.GetCount() - 1)
+             lb.SetSelection(anchor)
+        else:
+             play_sfx("historyremove.wav")
       
       def do_clear_history(event=None):
         dialog = wx.MessageDialog(frame, "Are you sure?", "Confirm Clear", wx.YES_NO | wx.ICON_WARNING)
@@ -1918,54 +2007,60 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         dialog.Destroy()
 
       ID_COPY, ID_COPY_ALL, ID_REMOVE, ID_CLEAR = wx.NewIdRef(), wx.NewIdRef(), wx.NewIdRef(), wx.NewIdRef()
+      
       def do_sort_by_name(event):
-        """Sort items by the target word, ignoring prefixes like 'Synonyms for'."""
+        # When sorting, we must first strip markers to sort correctly
+        # Ideally, we clear markers on sort to avoid confusion, OR keep them attached
+        # Here we clear markers for simplicity as order changes
         def _get_sort_key(item):
-          # Normalize text to lower case.
-          text = item.lower()
-          # List of prefixes to ignore during sort.
+          t = get_clean_text(item).lower()
           prefixes = ["word of the day: ", "synonyms for ", "antonyms for "]
           for prefix in prefixes:
-            if text.startswith(prefix):
-              return text[len(prefix):].strip()
-          return text
+            if t.startswith(prefix):
+              return t[len(prefix):].strip()
+          return t
 
-        current_items = lb.GetItems()
-        current_items.sort(key=_get_sort_key)
-        lb.Set(current_items)
-        if current_items:
-          lb.SetSelection(0)
+        current_items = [lb.GetString(i) for i in range(lb.GetCount())]
+        # Clean items before sort (Reset selection)
+        cleaned_items = [get_clean_text(i) for i in current_items]
+        
+        cleaned_items.sort(key=lambda x: _get_sort_key(x))
+        lb.Set(cleaned_items)
+        if cleaned_items: lb.SetSelection(0)
         play_sfx("tick.wav")
 
       def do_sort_by_recent(event):
-        """Restore items to the original chronological order."""
+        # Reset to original clean items
         lb.Set(original_items)
-        if original_items:
-          lb.SetSelection(0)
+        if original_items: lb.SetSelection(0)
         play_sfx("tick.wav")
 
       def on_context_menu(event):
         play_sfx("popupon.wav")
         menu = wx.Menu()
-        menu.Append(ID_COPY, "Copy\tCtrl+C")
+        
+        # Check if we have marked items
+        marked_count = 0
+        for i in range(lb.GetCount()):
+           if lb.GetString(i).endswith(MARKER):
+              marked_count += 1
+              
+        label_prefix = f"Marked ({marked_count})" if marked_count > 0 else "Current Item"
+
+        menu.Append(ID_COPY, f"Copy {label_prefix}\tCtrl+C")
         menu.Append(ID_COPY_ALL, "Copy All\tAlt+Shift+C")
         menu.AppendSeparator()
 
-        # Sort submenu configuration.
         sort_menu = wx.Menu()
-        id_sort_name = wx.NewIdRef()
-        id_sort_recent = wx.NewIdRef()
-        
+        id_sort_name, id_sort_recent = wx.NewIdRef(), wx.NewIdRef()
         sort_menu.Append(id_sort_name, "Name")
         sort_menu.Append(id_sort_recent, "Recent item")
         menu.AppendSubMenu(sort_menu, "Sort by")
-
-        # Bind sort events.
         menu.Bind(wx.EVT_MENU, do_sort_by_name, id=id_sort_name)
         menu.Bind(wx.EVT_MENU, do_sort_by_recent, id=id_sort_recent)
 
         menu.AppendSeparator()
-        menu.Append(ID_REMOVE, "Remove\tDelete")
+        menu.Append(ID_REMOVE, f"Remove {label_prefix}\tDelete")
         menu.Append(ID_CLEAR, "Clear\tShift+Delete")
         
         menu.Bind(wx.EVT_MENU, do_copy_selected, id=ID_COPY)
@@ -1998,11 +2093,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if kc == wx.WXK_ESCAPE:
           frame.Close()
           return
-        
         if kc == ord('C') and evt.ShiftDown() and evt.AltDown():
           do_copy_all()
           return
-          
         evt.Skip()
 
       frame.Bind(wx.EVT_CHAR_HOOK, _on_history_char_hook)
