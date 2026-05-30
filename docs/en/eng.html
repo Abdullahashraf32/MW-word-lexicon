@@ -15,6 +15,7 @@
             <h2>Table of Contents</h2>
             <ul>
                 <li><a href="#introduction">Introduction</a></li>
+                <li><a href="#v2.0update">v2.0: What's New</a></li>
                 <li><a href="#v1.3update">v1.3: What's New</a></li>
                 <li><a href="#features">Key Features</a></li>
                 <li><a href="#dialogs">Understanding the Interactive Dialogs</a></li>
@@ -35,7 +36,25 @@
                 This add-on uses the <strong>Merriam-Webster Dictionary API</strong> because it offers a generous free plan of <strong>1,000 requests per day</strong>. This ensures the add-on can remain free and reliable for all users. As a non-profit project, using a service that does not require payment was a key consideration during the add-on's design phases.
             </p>
         </section>
-<section id="v1.3update">
+
+        <section id="v2.0update">
+            <h2>V2.0: What's New</h2>
+            <p>This update of the add-on fully supports NVDA 2026, which is built on the 64-bit architecture, ensuring maximum compatibility and performance.</p>
+            
+            <h3>History Dialog Enhancements</h3>
+            <p>The History dialog has been significantly upgraded to provide a more efficient user experience. You can now perform multiple selections using the Spacebar. This feature supports extended selection, meaning you can mark various scattered items across your history without needing them to be in consecutive order. Once your desired items are marked, you can easily apply batch actions, such as copying or removing them all at once. Additionally, the context menu inside the dialog now includes "Filter by" and "Sort by" options. The "Filter by" feature allows you to narrow down your history to show only specific types of lookups, such as definitions, synonyms, antonyms, or the word of the day. The "Sort by" feature gives you the ability to organize your history either alphabetically by name or chronologically by the most recent items.</p>
+            
+            <h3>Smart Replacement for Synonyms and Antonyms</h3>
+            <p>To make the rephrasing process much smoother, we have introduced a new smart replacement feature. When you select a word in your text and request its synonyms or antonyms, the Definition dialog will open. Inside this dialog, you can simply select the new word you prefer and press Ctrl+Enter. The add-on will automatically close the dialog and replace your original selected word with the new one directly in your text.</p>
+            
+            <h3>Advanced Wildcard Search</h3>
+            <p>The Search dialog now supports wildcard characters to help you find words even when you are unsure of their exact spelling. If you cannot remember a single letter within a word, such as wondering whether it is "test" or "tist", you can replace the doubtful letter with a question mark (?). Pressing Enter will open a context menu displaying up to 15 possible options for you to choose the correct one. Similarly, if you know a part of the word but are missing multiple letters, you can use an asterisk (*). For example, typing "tea*" will bring up the same context menu with potential matches like "teaser", allowing you to browse and select the exact word you need to define.</p>
+
+            <h3>Smart Handling of Misspelled Words</h3>
+            <p>The add-on is now capable of smartly handling misspelled words. If you type a word with incorrect spelling and request its definition, synonyms, or antonyms, it will open a convenient context menu offering up to 10 spelling suggestions. You can easily choose the intended word from this menu, and the add-on will immediately fetch the requested information for the corrected word.</p>
+        </section>
+
+        <section id="v1.3update">
     <h2>v1.3: What's New</h2>
     <p>
         This update introduces important stability fixes and improvements that make the add-on more reliable and easier to use.
@@ -170,6 +189,7 @@ To ensure a fluid workflow, the add-on's main layer is designed to stay open dur
                     <tr><td><code>Ctrl+P</code></td><td>Play pronunciation of the original word or the single selected word within the dialog.</td></tr>
                     <tr><td><code>Shift+Up/Down Arrow</code></td><td>Increase or decrease audio playback speed.</td></tr>
                     <tr><td><code>Ctrl+Up/Down Arrow</code></td><td>Increase or decrease audio playback volume.</td></tr>
+<tr><td><code>Ctrl+Enter</code></td><td>Replace the original selected word in your text with the chosen synonym or antonym from the dialog (works only for synonyms and antonyms).</td></tr>
                     <tr><td><code>Escape</code></td><td>Close the dialog.</td></tr>
                 </tbody>
             </table>
@@ -182,6 +202,7 @@ To ensure a fluid workflow, the add-on's main layer is designed to stay open dur
                     <tr><td><code>Alt+Shift+C</code></td><td>Copy all history items.</td></tr>
                     <tr><td><code>Delete</code></td><td>Remove the currently focused history item.</td></tr>
                     <tr><td><code>Shift+Delete</code></td><td>Clear the entire history.</td></tr>
+                    <tr><td><code>Spacebar</code></td><td>Mark or unmark specific items to perform batch actions on multiple scattered elements.</td></tr>
                     <tr><td><code>Escape</code></td><td>Close the dialog.</td></tr>
                 </tbody>
             </table>
