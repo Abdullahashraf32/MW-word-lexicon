@@ -6,6 +6,26 @@ The MW Word Lexicon add-on is a powerful tool designed to integrate a comprehens
 
 This add-on uses the **Merriam-Webster Dictionary API** because it offers a generous free plan of **1,000 requests per day**. This ensures the add-on can remain free and reliable for all users. As a non-profit project, using a service that does not require payment was a key consideration during the add-on's design phases.
 
+## V2.0: What's New
+
+This update of the add-on fully supports NVDA 2026, which is built on the 64-bit architecture, ensuring maximum compatibility and performance.
+
+### History Dialog Enhancements
+
+The History dialog has been significantly upgraded to provide a more efficient user experience. You can now perform multiple selections using the Spacebar. This feature supports extended selection, meaning you can mark various scattered items across your history without needing them to be in consecutive order. Once your desired items are marked, you can easily apply batch actions, such as copying or removing them all at once. Additionally, the context menu inside the dialog now includes "Filter by" and "Sort by" options. The "Filter by" feature allows you to narrow down your history to show only specific types of lookups, such as definitions, synonyms, antonyms, or the word of the day. The "Sort by" feature gives you the ability to organize your history either alphabetically by name or chronologically by the most recent items.
+
+### Smart Replacement for Synonyms and Antonyms
+
+To make the rephrasing process much smoother, we have introduced a new smart replacement feature. When you select a word in your text and request its synonyms or antonyms, the Definition dialog will open. Inside this dialog, you can simply select the new word you prefer and press `Ctrl+Enter`. The add-on will automatically close the dialog and replace your original selected word with the new one directly in your text.
+
+### Advanced Wildcard Search
+
+The Search dialog now supports wildcard characters to help you find words even when you are unsure of their exact spelling. If you cannot remember a single letter within a word, such as wondering whether it is "test" or "tist", you can replace the doubtful letter with a question mark (`?`). Pressing Enter will open a context menu displaying up to 15 possible options for you to choose the correct one. Similarly, if you know a part of the word but are missing multiple letters, you can use an asterisk (`*`). For example, typing "tea\*" will bring up the same context menu with potential matches like "teaser", allowing you to browse and select the exact word you need to define.
+
+### Smart Handling of Misspelled Words
+
+The add-on is now capable of smartly handling misspelled words. If you type a word with incorrect spelling and request its definition, synonyms, or antonyms, it will open a convenient context menu offering up to 10 spelling suggestions. You can easily choose the intended word from this menu, and the add-on will immediately fetch the requested information for the corrected word.
+
 ## v1.3: What's New
 
 This update introduces important stability fixes and improvements that make the add-on more reliable and easier to use.
@@ -95,12 +115,13 @@ To ensure a fluid workflow, the add-on's main layer is designed to stay open dur
 
 ### Definition Dialog Shortcuts
 
-| Shortcut              | Action                                                                                            |
-| :-------------------- | :------------------------------------------------------------------------------------------------ |
-| `Ctrl+P`              | Play pronunciation of the original word or the single selected word within the definition dialog. |
-| `Shift+Up/Down Arrow` | Increase or decrease audio playback speed.                                                        |
-| `Ctrl+Up/Down Arrow`  | Increase or decrease audio playback volume.                                                       |
-| `Escape`              | Close the dialog.                                                                                 |
+| Shortcut              | Action                                                                                                                                     |
+| :-------------------- | :----------------------------------------------------------------------------------------------------------------------------------------- |
+| `Ctrl+P`              | Play pronunciation of the original word or the single selected word within the definition dialog.                                          |
+| `Shift+Up/Down Arrow` | Increase or decrease audio playback speed.                                                                                                 |
+| `Ctrl+Up/Down Arrow`  | Increase or decrease audio playback volume.                                                                                                |
+| `Ctrl+Enter`  | Replace the original selected word in your text with the chosen synonym or antonym from the dialog (works only for synonyms and antonyms).                                                                                                |
+| `Escape`              | Close the dialog.                                                                                                                          |
 
 ### History Dialog Shortcuts
 
@@ -110,6 +131,7 @@ To ensure a fluid workflow, the add-on's main layer is designed to stay open dur
 | `Alt+Shift+C`  | Copy all history items.                    |
 | `Delete`       | Remove the currently focused history item. |
 | `Shift+Delete` | Clear the entire history.                  |
+| `Spacebar`  | Mark or unmark specific items to perform batch actions on multiple scattered elements.                  |
 | `Escape`       | Close the dialog.                          |
 
 ## Important Notes

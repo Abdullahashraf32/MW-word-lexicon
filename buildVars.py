@@ -25,11 +25,11 @@ addon_info = {
 	# Translators: Long description to be shown for this add-on on add-on information from add-on store
 	"addon_description": _("""
 						This NVDA add-on enables you instantly to look up word definitions, synonyms, and antonyms using the Merriam-Webster Dictionary API. Also includes a 'Word of the Day' feature to expand your vocabulary, all without leaving your current application.
-						With the release of version 1.3, the add-on now features an optional comprehensive sound effects scheme for enhanced feedback. Additionally, it utilizes a new layer-based shortcut system designed to prevent conflicts with global shortcuts reserved for other programs, ensuring a smoother and more accessible user experience.
+						With the release of version 2.0, the add-on introduces full compatibility with the 64-bit NVDA 2026 release. Major new features include a smart text replacement tool for synonyms and antonyms, advanced wildcard searches, intelligent spelling suggestions for typos, and a highly upgraded history dialog with multi-selection, sorting, and filtering capabilities. It also retains its optional sound effects scheme and the conflict-free layer-based shortcut system.
 						To learn more about the add-on, you are invited to visit its User Guide by pressing the shortcut key Ctrl+Shift+D and then pressing F1.
 						"""),
 	# version
-	"addon_version": "1.3",
+	"addon_version": "2.0",
 	# Author(s)
 	"addon_author": "Abdullah Ashraf <abdullahashraf4846@gmail.com",
 	# URL for the add-on documentation support
@@ -39,9 +39,9 @@ addon_info = {
 	# Documentation file name
 	"addon_docFileName": "readme.md",
 	# Minimum NVDA version supported (e.g. "2019.3.0", minor version is optional)
-	"addon_minimumNVDAVersion": "2024.1",
+	"addon_minimumNVDAVersion": "2025.3.3",
 	# Last NVDA version supported/tested (e.g. "2024.4.0", ideally more recent than minimum version)
-	"addon_lastTestedNVDAVersion": "2025.3.2",
+	"addon_lastTestedNVDAVersion": "2026.1.1",
 	# Add-on update channel (default is None, denoting stable releases,
 	# and for development releases, use "dev".)
 	# Do not change unless you know what you are doing!
